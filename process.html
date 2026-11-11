@@ -31,6 +31,7 @@
     <div class="grow"></div>
     <button id="btnCoverage" class="toggle active process-chrome" title="Подсветка покрытия кода">Покрытие кода</button>
     <button id="btnGapsOnly" class="toggle process-chrome" title="Показать только разрывы">Только разрывы</button>
+    <button id="btnFocus" class="toggle process-chrome" title="Оставить на экране только текущий шаг плеера">Фокус на шаге</button>
     <select id="laneFilter" class="process-chrome" title="Фильтр роли"><option value="">Все роли</option></select>
     <a class="btn process-chrome" href="index.html">← Матрица прав</a>
     <a class="btn process-chrome" href="approve.html">Протокол апрувов</a>
@@ -95,6 +96,16 @@
   удаление материалов, апрув нового канала, retention. Их не прячут, их разбирают с владельцем.
 </footer>
 
+<!-- Нижняя панель — только с телефона. Шаговые кнопки всегда на экране,
+     а во время воспроизведения ◀ и ▶ уходят в «сендвич» (там они и лежат в меню):
+     во время автопроигрывания человеку нужна одна кнопка — пауза. -->
+<div class="mobile-dock" id="playerDock">
+  <button type="button" id="btnPrevDock" title="Предыдущий шаг">◀ Назад</button>
+  <button type="button" id="btnPlayDock" class="primary" title="Запустить или остановить плеер">▶ Плей</button>
+  <button type="button" id="btnNextDock" title="Следующий шаг">Вперёд ▶</button>
+  <div class="dock-note" id="dockNote">Выберите сценарий и нажмите «Плей»</div>
+</div>
+
 <script src="kz.data.js"></script>
 <script src="kz.flow.js"></script>
 <script>
@@ -116,6 +127,8 @@
     view: 'process',
     coverage: true,
     gapsOnly: false,
+    focus: false,        // «Фокус на шаге»: оставить на экране только текущий шаг
+    centeredKey: '',     // какой шаг уже подведён к центру экрана
     lane: '',
     group: ''
   };
@@ -177,21 +190,33 @@
   }
 
   /* ── Матрица-дорожки ─────────────────────────────────────────────────── */
+  function activeStepIds() { return state.step >= 0 ? cur().steps[state.step].nodes : []; }
+
   function nodeVisible(n) {
     if (state.lane && n.lane !== state.lane) return false;
     if (state.gapsOnly && n.cov !== 'no') return false;
+    // «Фокус на шаге»: на экране остаётся только то, что происходит прямо сейчас.
+    // На телефоне это главный режим — иначе после каждого шага взгляд ищет узел в длинном списке.
+    if (state.focus && state.step >= 0 && activeStepIds().indexOf(n.id) === -1) return false;
     return true;
   }
 
   function renderLanes() {
-    var pathIds = playPathIds();
-    var activeIds = state.step >= 0 ? cur().steps[state.step].nodes : [];
+    var activeIds = activeStepIds();
     var html = '';
+    if (state.focus && state.step >= 0) {
+      html += '<div class="hint">Фокус на шаге ' + (state.step + 1) + ': на экране только то, что происходит сейчас. ' +
+        'Выключите «Фокус на шаге», чтобы увидеть весь процесс целиком.</div>';
+    } else if (state.focus && state.step < 0) {
+      html += '<div class="hint">Фокус включён: он заработает на первом же шаге плеера.</div>';
+    }
     F.lanes.forEach(function (lane) {
       var nodes = F.nodes.filter(function (n) { return n.lane === lane.id; });
       if (state.lane && lane.id !== state.lane) return;
       if (!nodes.length) return;
-      var laneDim = state.step >= 0 && !activeIds.some(function (id) { return NODES_BY_ID[id].lane === lane.id; });
+      var laneActive = activeIds.filter(function (id) { return NODES_BY_ID[id] && NODES_BY_ID[id].lane === lane.id; });
+      if (state.focus && state.step >= 0 && !laneActive.length) return;
+      var laneDim = state.step >= 0 && !laneActive.length;
       html += '<div class="lane ' + lane.cls + (laneDim ? ' dim' : '') + '">' +
         '<div class="lane-label">' + esc(lane.title) + '</div><div class="lane-nodes">';
       var shown = 0;
@@ -291,6 +316,7 @@
     state.playing = true;
     document.getElementById('btnPlay').textContent = '❚❚ Пауза';
     if (state.step < 0) goStep(0);
+    syncDock();
     state.timer = setInterval(function () { goStep(state.step + 1); }, 2200);
   }
 
@@ -326,22 +352,71 @@
       '<div class="stat"><b>' + s.approvalsGap + '</b><span>пробелов протокола</span></div>';
   }
 
+  /* Нижняя панель телефона: держим её в одном состоянии с шапкой.
+     Идёт воспроизведение — ◀ и ▶ на панели скрываются (класс playing),
+     остаётся одна пауза; они же всегда доступны в «сендвиче». */
+  function syncDock() {
+    var dock = document.getElementById('playerDock');
+    if (!dock) return;
+    dock.classList.toggle('playing', state.playing);
+    dock.classList.toggle('off', state.view !== 'process');
+    var dockPlay = document.getElementById('btnPlayDock');
+    if (dockPlay) dockPlay.textContent = state.playing ? '❚❚ Пауза' : '▶ Плей';
+    var topPlay = document.getElementById('btnPlay');
+    if (topPlay) topPlay.textContent = state.playing ? '❚❚ Пауза' : '▶ Плей';
+    var note = document.getElementById('dockNote');
+    if (note) {
+      if (state.step < 0) {
+        note.textContent = 'Выберите сценарий и нажмите «Плей»';
+      } else {
+        var sc = cur();
+        note.textContent = 'Шаг ' + (state.step + 1) + ' из ' + sc.steps.length + ' · ' +
+          groupTitle(sc.group) + ' · «Плей» уберёт ◀ ▶ в меню';
+      }
+    }
+  }
+
+  /* Подвести взгляд к текущему узлу. Вызывается после каждого шага плеера:
+     на телефоне дорожки идут в столбик, и без этого экран остаётся на прошлом
+     шаге, пока сценарий уже ушёл вперёд. */
+  function focusCurrent() {
+    if (state.step < 0) return;
+    var key = state.scenario + '#' + state.step;
+    if (state.centeredKey === key) return;
+    state.centeredKey = key;
+    var ids = activeStepIds().filter(function (id) { return NODES_BY_ID[id] && nodeVisible(NODES_BY_ID[id]); });
+    var id = ids[0];
+    if (!id) return;
+    if (window.KZMobile && window.KZMobile.centerNode) {
+      window.KZMobile.centerNode(id);
+      return;
+    }
+    var el = document.querySelector('button.node[data-id="' + id + '"]');
+    if (el && el.scrollIntoView) {
+      try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+      catch (e) { el.scrollIntoView(); }
+    }
+  }
+
   function renderAll() {
     var sc = cur();
     document.getElementById('statusLine').textContent = groupTitle(sc.group) + ' · ' + sc.title +
       (state.step >= 0 ? ' · шаг ' + (state.step + 1) + '/' + sc.steps.length : ' · плеер остановлен');
     document.getElementById('btnCoverage').classList.toggle('active', state.coverage);
     document.getElementById('btnGapsOnly').classList.toggle('active', state.gapsOnly);
+    document.getElementById('btnFocus').classList.toggle('active', state.focus);
     document.body.classList.toggle('coverage-off', !state.coverage);
     document.getElementById('processView').hidden = state.view !== 'process';
     document.getElementById('gatesView').hidden = state.view !== 'gates';
     document.querySelectorAll('#viewSeg button').forEach(function (b) { b.classList.toggle('active', b.dataset.view === state.view); });
-    renderSelectors(); renderScenarioPickers(); renderStats(); renderLanes(); renderSide(); updatePlayer();
+    renderSelectors(); renderScenarioPickers(); renderStats(); renderLanes(); renderSide(); updatePlayer(); syncDock();
+    if (state.view === 'process') focusCurrent();
     var q = [];
     q.push('scenario=' + encodeURIComponent(state.scenario));
     if (state.step >= 0) q.push('step=' + state.step);
     if (state.node) q.push('node=' + encodeURIComponent(state.node));
     if (state.lane) q.push('lane=' + encodeURIComponent(state.lane));
+    if (state.focus) q.push('focus=1');
     if (state.view !== 'process') q.push('view=' + encodeURIComponent(state.view));
     try { history.replaceState(null, '', location.pathname + '?' + q.join('&')); } catch (e) {}
   }
@@ -358,6 +433,9 @@
   document.getElementById('lanes').addEventListener('click', function (e) {
     var b = e.target.closest('button.node'); if (!b) return;
     state.node = b.dataset.id; renderAll();
+    // С телефона подробности уезжают под схему: подводим человека к ним,
+    // чтобы клик по узлу не выглядел «ничем не ответил».
+    if (window.KZMobile && window.KZMobile.isMobile && window.KZMobile.isMobile()) window.KZMobile.revealSide();
   });
   document.getElementById('scenarioSelect').addEventListener('change', function (e) { pickScenario(e.target.value); });
   document.getElementById('scenarioFilters').addEventListener('click', function (e) {
@@ -377,10 +455,26 @@
   });
   document.getElementById('btnPrev').addEventListener('click', function () { goStep(state.step - 1); });
   document.getElementById('btnNext').addEventListener('click', function () { goStep(state.step + 1); });
+
+  /* Кнопки нижней панели телефона — те же действия, что и в шапке */
+  (function dockHandlers() {
+    var prev = document.getElementById('btnPrevDock');
+    var next = document.getElementById('btnNextDock');
+    var play = document.getElementById('btnPlayDock');
+    if (prev) prev.addEventListener('click', function () { stopPlay(false); goStep(state.step - 1); });
+    if (next) next.addEventListener('click', function () { stopPlay(false); goStep(state.step + 1); });
+    if (play) play.addEventListener('click', togglePlay);
+  }());
   document.getElementById('btnPlay').addEventListener('click', togglePlay);
   document.getElementById('btnStop').addEventListener('click', function () { stopPlay(true); });
   document.getElementById('btnCoverage').addEventListener('click', function () { state.coverage = !state.coverage; renderAll(); });
   document.getElementById('btnGapsOnly').addEventListener('click', function () { state.gapsOnly = !state.gapsOnly; renderAll(); });
+  document.getElementById('btnFocus').addEventListener('click', function () {
+    state.focus = !state.focus;
+    state.centeredKey = '';
+    if (state.focus && state.step < 0) goStep(0);
+    renderAll();
+  });
   document.getElementById('laneFilter').addEventListener('change', function (e) { state.lane = e.target.value; renderAll(); });
   document.getElementById('viewSeg').addEventListener('click', function (e) {
     var b = e.target.closest('button[data-view]'); if (!b) return;
@@ -406,11 +500,17 @@
     if (lane && LANES_BY_ID[lane]) state.lane = lane;
     var view = q.get('view');
     if (view === 'gates' || view === 'process') state.view = view;
+    // С телефона «Фокус на шаге» включается сразу: на узком экране это
+    // единственный способ видеть текущий шаг, а не весь процесс целиком.
+    state.focus = !!(window.KZMobile && window.KZMobile.isMobile && window.KZMobile.isMobile());
+    if (q.get('focus') === '1') state.focus = true;
+    if (q.get('focus') === '0') state.focus = false;
   }());
 
   renderGates();
   renderAll();
 }());
 </script>
+<script src="kz.mobile.js"></script>
 </body>
 </html>

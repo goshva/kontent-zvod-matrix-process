@@ -58,6 +58,7 @@
         Строки — модули и их поля. Столбцы — статусы выбранной оси.
         В ячейке четыре буквы: <b>C</b> R U D. Клик по ячейке — подробности справа: ограничения и цитаты из кода.
         <span class="badge">Ось «единица контента» и ось «запись очереди» — разные вещи, их нельзя путать</span>
+        <span class="badge">С телефона матрица показывается карточками: одно поле — одна карточка, статусы — строками внутри</span>
       </div>
       <div class="matrix-wrap"><table class="matrix" id="matrixTable"></table></div>
     </div>
@@ -294,13 +295,17 @@
           var hay = (m.title + ' ' + f.title + ' ' + m.files.join(' ') + ' ' + f.kind).toLowerCase();
           if (hay.indexOf(q) === -1) hide = true;
         }
-        html += '<tr data-field="' + f.id + '" class="' + (hide ? 'hidden' : '') + '">' +
+        // data-module и data-status — для карточек на телефоне: там таблица
+        // превращается в карточки, и подписи берутся из этих атрибутов.
+        html += '<tr data-field="' + f.id + '" data-module="' + esc(m.title) + '" class="' + (hide ? 'hidden' : '') + '">' +
           '<td class="col-head"><b>' + esc(f.title) + '</b><br>' +
           '<span class="mono" style="color:var(--muted);font-size:10.5px">' + esc(f.kind) + ' · ' + esc(f.src) + '</span></td>';
         sts.forEach(function (st, i) {
           var cell = computeCell(state.level, state.role, st.id, f.id);
           var sel = state.selected && state.selected.field === f.id && state.selected.status === i;
-          html += '<td class="matrix-cell' + (sel ? ' selected' : '') + '" data-field="' + f.id + '" data-status-idx="' + i + '">' +
+          var isCur = (i === state.statusIdx[state.level]);
+          html += '<td class="matrix-cell' + (sel ? ' selected' : '') + (isCur ? ' is-current' : '') +
+            '" data-field="' + f.id + '" data-status-idx="' + i + '" data-status="' + esc(st.title) + '">' +
             cellHtml(cell) + '</td>';
         });
         html += '</tr>';
@@ -612,6 +617,9 @@
     state.selected = { field: td.dataset.field, status: parseInt(td.dataset.statusIdx, 10) };
     state.statusIdx[state.level] = state.selected.status;
     renderAll();
+    // С телефона панель подробностей уезжает под матрицу: подводим к ней,
+    // иначе клик по ячейке выглядит так, будто ничего не произошло.
+    if (window.KZMobile && window.KZMobile.isMobile && window.KZMobile.isMobile()) window.KZMobile.revealSide();
   });
   document.getElementById('searchInput').addEventListener('input', function (e) {
     state.search = e.target.value.trim(); renderMatrix();
@@ -645,5 +653,6 @@
   saveEdits();
 }());
 </script>
+<script src="kz.mobile.js"></script>
 </body>
 </html>
