@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Контент-завод — протокол апрувов</title>
+<link rel="stylesheet" href="kz.css">
+<style>
+  tr[data-ap],.map-card[data-ap],.card[data-ap]{cursor:pointer;}
+  tr.sel-row td{background:var(--accent-soft);}
+  tr.gap-row td{background:var(--warn-bg);}
+  tr.gap-row:hover td{background:#ffefd9;}
+  .gap-title{font-size:14px;font-weight:700;margin:0 0 4px;}
+  .takeaway li{margin-bottom:6px;line-height:1.5;}
+  .side-link{margin-top:10px;display:inline-block;}
+</style>
+</head>
+<body>
+
+<header class="app">
+  <h1>Контент-завод — протокол апрувов</h1>
+  <div class="sub">
+    Все точки, где завод <b>останавливается и ждёт человека</b>: и предохранители, которые уже стоят в коде,
+    и места, где их нет вовсе. Всего точек: <b id="subCount">—</b>.
+    Источники: <code>publish_queue.py</code>, <code>installer/schedule_publisher.py</code>, <code>modules/content_plan/*</code>,
+    <code>checks.py</code>, <code>activation_gate.py</code>, <code>health_report.py</code>, <code>github_backup.py</code>,
+    <code>updater.py</code>, <code>ПРАВИЛА_ЗАВОДА.md</code>, <code>CLAUDE.md</code> — и другие файлы, названные в поле «Источник» у каждой точки.
+    Ни одна строка не придумана: у каждой точки есть файл и строка, а цитата взята из источника.
+  </div>
+  <div class="toolbar">
+    <div class="seg" id="viewSeg">
+      <button data-view="list" class="active">Список</button>
+      <button data-view="cards">Карточки</button>
+      <button data-view="gaps">Пробелы</button>
+      <button data-view="map">Связь с матрицей</button>
+    </div>
+    <label class="inline">Тип
+      <select id="typeFilter">
+        <option value="">Все типы</option>
+        <option value="queue">Очередь публикации</option>
+        <option value="publish">Отправка на площадки</option>
+        <option value="plan">Контент-план</option>
+        <option value="quality">Качество сборки</option>
+        <option value="technical">Технический допуск</option>
+        <option value="process">Процесс</option>
+        <option value="deny">Запрет</option>
+        <option value="gap">Пробел протокола</option>
+      </select>
+    </label>
+    <label class="inline">Гейт
+      <select id="gateFilter">
+        <option value="">Любой гейт</option>
+        <option value="жёсткий">жёсткий</option>
+        <option value="мягкий">мягкий</option>
+        <option value="нет">нет</option>
+      </select>
+    </label>
+    <label class="inline">Поиск <input type="search" id="searchInput" placeholder="точка, команда, цитата…" style="width:190px"></label>
+    <div class="grow"></div>
+    <button id="printBtn" title="Печать страницы">Печать</button>
+    <a class="btn" href="index.html">← Матрица прав</a>
+    <a class="btn" href="process.html">Плеер сценариев</a>
+    <a class="btn" href="protocol-map.html">Карта протокола</a>
+    <a class="btn" href="questionnaire.html">Опросник владельца</a>
+  </div>
+</header>
+
+<div class="legend">
+  <span><span class="sw allow"></span>жёсткий предохранитель — остановит завод</span>
+  <span><span class="sw conditional"></span>мягкий — держится на договорённости</span>
+  <span><span class="sw deny"></span>точки апрува нет (пробел протокола)</span>
+  <span class="badge">клик по точке — подробности справа</span>
+  <span class="badge" id="statusLine"></span>
+</div>
+
+<div class="layout">
+  <div class="main" id="mainWrap">
+
+    <div class="stats" id="statsRow"></div>
+
+    <div class="view-panel" id="listView"></div>
+    <div class="view-panel" id="cardsView" hidden></div>
+    <div class="view-panel" id="gapsView" hidden></div>
+    <div class="view-panel" id="mapView" hidden></div>
+
+    <h2>Главное, что нужно понять из протокола</h2>
+    <div class="card">
+      <ol class="takeaway" id="takeawayList"></ol>
+    </div>
+
+  </div>
+
+  <aside class="side" id="sidePanel">
+    <div class="empty" id="sideEmpty">
+      Кликните точку апрува — здесь появятся: кто и на каком основании её решает, чем именно завод останавливается,
+      цитата из источника, связанные правила матрицы и ссылка на матрицу прав.
+    </div>
+    <div id="sideContent" hidden></div>
+  </aside>
+</div>
+
+<footer class="app" style="padding:10px 16px;color:var(--muted);font-size:11.5px;border-top:1px solid var(--border);background:var(--panel);position:static;">
+  Данные: <code>kz.flow.js</code> (массив <code>KZFLOW.approvals</code>) и <code>kz.data.js</code>
+  (<code>KZ.rules</code>, <code>KZ.gaps</code>, <code>KZ.openQuestions</code>) — счётчики и список точек страница берёт из данных, а не из вёрстки.
+  Связь «точка апрува → правило матрицы» — сопоставление по смыслу, сделанное в этом файле: и точка, и правило подтверждены кодом.
+</footer>
+
+<script src="kz.data.js"></script>
+<script src="kz.flow.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var F = window.KZFLOW, KZ = window.KZ;
+  if (!F || !KZ) {
+    document.body.innerHTML = '<p style="padding:20px">Не загрузились файлы данных (kz.data.js, kz.flow.js)</p>';
+    return;
+  }
+
+  /* ── Подписи и сопоставления ─────────────────────────────────────────── */
+  var TYPE_LABELS = {
+    queue: 'Очередь публикации',
+    publish: 'Отправка на площадки',
+    plan: 'Контент-план',
+    quality: 'Качество сборки',
+    technical: 'Технический допуск',
+    process: 'Процесс',
+    deny: 'Запрет',
+    gap: 'Пробел протокола'
+  };
+
+  /* Сопоставление по смыслу: точка апрува → правила матрицы, которые её поддерживают. */
+  var RULE_MAP = {
+    'AP-1': ['R-AGT-1', 'R-Q-2'],
+    'AP-2': ['R-Q-6'],
+    'AP-3': ['R-Q-2'],
+    'AP-4': ['R-Q-4'],
+    'AP-5': ['R-Q-3'],
+    'AP-6': ['R-PUB-1', 'R-Q-8'],
+    'AP-7': ['R-CP-2', 'R-CP-3'],
+    'AP-8': ['R-CP-2', 'R-CP-3'],
+    'AP-9': ['R-GATE-1', 'R-GATE-2'],
+    'AP-10': ['R-ACT-1', 'R-ACT-2'],
+    'AP-11': ['R-CONSENT-1', 'R-CONSENT-2'],
+    'AP-12': ['R-BKP-1', 'R-SEC-2'],
+    'AP-13': ['R-SEC-1', 'R-CFG-1', 'R-SEC-4'],
+    'AP-14': ['R-CH-3'],
+    'AP-15': ['R-WORK-1'],
+    'AP-16': ['R-CH-2', 'R-VK-2'],
+    'AP-17': ['R-PUB-1'],
+    'AP-18': ['R-CH-1'],
+    'AP-19': ['R-MED-2', 'R-ARCH-1', 'R-Q-10'],
+    'AP-20': ['R-J-2', 'R-ART-1'],
+    'AP-21': ['R-MONEY-1'],
+    'AP-22': ['R-CP-7'],
+    'AP-23': ['R-CP-8', 'R-CP-5'],
+    'AP-24': ['R-Q-9', 'R-Q-2'],
+    'AP-25': ['R-STORY-2', 'R-STORY-1']
+  };
+
+  /* Что предлагается сделать с пробелом — и на какую запись gap-анализа он опирается. */
+  var GAP_FIX = {
+    'AP-18': 'Что предлагается: подключение нового канала — решение владельца, а не техническое действие.',
+    'AP-19': 'Что предлагается: вместо удаления ввести архивирование.',
+    'AP-20': 'Что предлагается: владельцу задать сроки хранения — журналы, кеши, исходники.'
+  };
+  var GAP_REF = {
+    'AP-18': ['channels', 'Апрув нового канала'],
+    'AP-19': ['media', 'Delete'],
+    'AP-20': ['media', 'Retention']
+  };
+
+  /* ── Мелкие помощники ────────────────────────────────────────────────── */
+  var BY_ID = {};
+  F.approvals.forEach(function (a) { BY_ID[a.id] = a; });
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function byId(id) { return BY_ID[id] || null; }
+  function gateCls(g) { return g === 'жёсткий' ? 'ok' : (g === 'мягкий' ? 'part' : 'no'); }
+  function gateWord(g) { return g === 'жёсткий' ? 'жёсткий' : (g === 'мягкий' ? 'мягкий' : 'нет'); }
+  function typeLabel(a) { return TYPE_LABELS[a.type] || a.type; }
+  function gapEntry(mod, aspect) {
+    var found = KZ.gaps.filter(function (g) { return g.module === mod && g.aspect === aspect; });
+    return found.length ? found[0] : null;
+  }
+  function hasQuote(a) { return !!a.quote && a.quote !== '—'; }
+
+  /* Кто имеет право — простыми словами, строго из поля who и типа точки. */
+  function whoPlain(a) {
+    if (a.type === 'gap') return 'Права нет ни у кого: точки апрува в коде не существует, поэтому выполнить это действие некому — решение остаётся за владельцем.';
+    if (a.who === 'Запрет') return 'Никто. Это не право, а запрет: действие не выполняет ни человек, ни агент.';
+    if (a.who === 'Код') return 'Никто из людей не решает это вручную: проверку выполняет код завода, и обойти её ролью нельзя.';
+    if (a.who === '—') return 'Права нет ни у кого: в коде нет ни точки апрува, ни исполнителя.';
+    if (a.who.indexOf('Владелец') !== -1 && a.who.indexOf('код') !== -1) {
+      return 'Владелец — человек задаёт просьбу, а код завода следит за формальной стороной (флаг, проверка). Агент сам этого не делает.';
+    }
+    if (a.who.indexOf('Владелец') !== -1 && a.who.indexOf('редактор') !== -1) {
+      return 'Люди: владелец или редактор. Агент не имеет права выполнить это действие.';
+    }
+    if (a.who.indexOf('Владелец') !== -1) {
+      return 'Владелец — человек. Агент не имеет права выполнить это действие и не может выдать разрешение себе.';
+    }
+    if (a.who.indexOf('Человек') !== -1) {
+      return 'Человек, а не агент: машина не имеет права поставить это решение вместо него.';
+    }
+    if (a.who.indexOf('Планировщик') !== -1) {
+      return 'Служба завода по расписанию. Она не решает, что публиковать: без человеческого «да» крутится вхолостую.';
+    }
+    return 'Решает: ' + a.who + '.';
+  }
+
+  /* ── Состояние и фильтры ─────────────────────────────────────────────── */
+  var state = { view: 'list', type: '', gate: '', search: '', selected: null };
+
+  function searchHit(a) {
+    if (!state.search) return true;
+    var hay = [a.id, a.title, a.who, a.gate, a.cmd, a.blocks, a.quote, a.src, typeLabel(a)].join(' ').toLowerCase();
+    return hay.indexOf(state.search) !== -1;
+  }
+  function passes(a) {
+    if (state.type && a.type !== state.type) return false;
+    if (state.gate && a.gate !== state.gate) return false;
+    return searchHit(a);
+  }
+  function filtered() { return F.approvals.filter(passes); }
+
+  function plural(n, one, few, many) {
+    var m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return one;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+    return many;
+  }
+  function apLink(id) {
+    var a = byId(id);
+    if (!a) return '<span class="mono">' + esc(id) + '</span>';
+    return '<a href="#" data-ap="' + esc(id) + '">' + esc(id) + '</a>';
+  }
+
+  /* ── Пять пунктов внизу — всё из данных ──────────────────────────────── */
+  function renderTakeaway() {
+    var gaps = F.approvals.filter(function (a) { return a.type === 'gap'; });
+    var gapList = gaps.map(function (a) {
+      return apLink(a.id) + ' (' + esc(a.title.toLowerCase()) + ')';
+    }).join(', ');
+    document.getElementById('takeawayList').innerHTML =
+      '<li><b>Одобрение ставит только человек.</b> ' + apLink('AP-1') + ' — единственное место, где появляется слово «одобрено»;' +
+        ' и одного статуса мало: ' + apLink('AP-3') + ' требует ещё и непустую отметку человека. Агент не ставит этот статус ни при какой формулировке просьбы.</li>' +
+      '<li><b>Времени самого по себе недостаточно.</b> Расписание только зовёт очередь: ' + apLink('AP-5') +
+        ' крутится вхолостую, пока нет человеческого «да», — «включено расписание» и «завод публикует сам по себе» разные вещи.</li>' +
+      '<li><b>Каждая дочерняя команда обязана нести <span class="mono">--send</span>.</b> ' + apLink('AP-4') +
+        ' — без флага команда не запускается, а отказ попадает в журнал. Это одно правило на все точки выхода сразу.</li>' +
+      '<li><b>У завода есть зоны, которые не трогает ни одна роль.</b> ' + apLink('AP-13') + ': патч не имеет права заходить в ' +
+        '<span class="mono">_FORBIDDEN</span> — настройки, ключи, медиа, журналы, готовые сборки. Значит, это право нельзя выдать и ролью.</li>' +
+      '<li><b>В протоколе ' + gaps.length + ' ' + plural(gaps.length, 'дырка', 'дырки', 'дырок') + '</b> — ' + gapList +
+        '. В коде этих точек апрува нет; что с ними делать — решает владелец.</li>';
+  }
+
+  /* ── Статистика ──────────────────────────────────────────────────────── */
+  function renderStats() {
+    var soft = F.approvals.filter(function (a) { return a.gate === 'мягкий'; }).length;
+    var quoted = F.approvals.filter(hasQuote).length;
+    document.getElementById('statsRow').innerHTML =
+      '<div class="stat"><b>' + F.stats.approvals + '</b><span>точек апрува всего</span></div>' +
+      '<div class="stat"><b>' + F.stats.hardGates + '</b><span>жёстких предохранителей</span></div>' +
+      '<div class="stat"><b>' + soft + '</b><span>мягких</span></div>' +
+      '<div class="stat"><b>' + F.stats.approvalsGap + '</b><span>пробелов протокола</span></div>' +
+      '<div class="stat"><b>' + quoted + '</b><span>точек с цитатой</span></div>';
+    document.getElementById('subCount').textContent = F.stats.approvals;
+  }
+
+  /* ── Связанные правила (общий блок) ──────────────────────────────────── */
+  function rulesHtml(a, emptyText) {
+    var rids = RULE_MAP[a.id] || [];
+    if (!rids.length) return '<div class="hint">' + esc(emptyText) + '</div>';
+    return rids.map(function (rid) {
+      var r = KZ.rules[rid];
+      if (!r) return '<div class="rule-item"><span class="rid">' + esc(rid) + '</span> — правила с таким ID в kz.data.js нет.</div>';
+      return '<div class="rule-item"><span class="rid">' + esc(rid) + '</span>' +
+        '<div class="rtitle"><b>' + esc(r.title) + '</b></div>' +
+        '<div>' + esc(r.text) + '</div>' +
+        '<div class="rsrc">' + esc(r.src) + '</div></div>';
+    }).join('');
+  }
+
+  /* ── Вид «Список» ────────────────────────────────────────────────────── */
+  function renderList() {
+    var list = filtered();
+    var html = '<div class="hint">Каждая строка — точка, где завод останавливается и ждёт человека. Клик по строке — подробности справа. ' +
+      'Строки с пометкой <span class="badge warn">пробел</span> — места, где точки апрува в коде нет вовсе.</div>';
+    if (!list.length) {
+      html += '<div class="card">Под этот фильтр не подошла ни одна точка. Сбросьте тип, гейт или поиск.</div>';
+      document.getElementById('listView').innerHTML = html;
+      return;
+    }
+    html += '<table class="tbl"><thead><tr><th>ID</th><th>Что останавливает</th><th>Кто решает</th><th>Тип гейта</th>' +
+      '<th>Чем</th><th>Что именно блокируется</th><th>Цитата</th><th>Источник</th></tr></thead><tbody>';
+    list.forEach(function (a) {
+      var gap = a.type === 'gap';
+      html += '<tr data-ap="' + esc(a.id) + '" class="' + (gap ? 'gap-row' : '') + (state.selected === a.id ? ' sel-row' : '') + '">' +
+        '<td class="cite">' + esc(a.id) + (gap ? '<br><span class="badge warn">пробел</span>' : '') + '</td>' +
+        '<td class="rowhead">' + esc(a.title) + '</td>' +
+        '<td>' + esc(a.who) + '</td>' +
+        '<td><span class="pill ' + gateCls(a.gate) + '">' + esc(gateWord(a.gate)) + '</span></td>' +
+        '<td class="cite">' + esc(a.cmd) + '</td>' +
+        '<td>' + esc(a.blocks) + '</td>' +
+        '<td>' + esc(a.quote) + '</td>' +
+        '<td class="cite">' + esc(a.src) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('listView').innerHTML = html;
+  }
+
+  /* ── Вид «Карточки» ──────────────────────────────────────────────────── */
+  function renderCards() {
+    var list = filtered();
+    var html = '<div class="hint">Та же двадцатка, но крупно: одна карточка — одна точка. Пробелы протокола выделены красной линией слева.</div>';
+    if (!list.length) {
+      html += '<div class="card">Под этот фильтр не подошла ни одна точка.</div>';
+      document.getElementById('cardsView').innerHTML = html;
+      return;
+    }
+    html += '<div class="grid c2">';
+    list.forEach(function (a) {
+      var gap = a.type === 'gap';
+      var human = a.who.indexOf('Владелец') !== -1 || a.who.indexOf('Человек') !== -1 || a.who.indexOf('редактор') !== -1;
+      var cls = 'map-card' + (gap ? ' deny' : (human ? ' human' : ' agent'));
+      html += '<div class="' + cls + '" data-ap="' + esc(a.id) + '">' +
+        '<div class="who">' + esc(a.id) + ' · ' + esc(a.title) + '</div>' +
+        '<div class="what">' + esc(a.blocks) + '</div>' +
+        '<div class="hint" style="margin:5px 0 3px">Кто решает: <b>' + esc(a.who) + '</b> · гейт: ' +
+        '<span class="pill ' + gateCls(a.gate) + '">' + esc(gateWord(a.gate)) + '</span> · ' + esc(typeLabel(a)) +
+        (gap ? ' · <span class="badge warn">пробел</span>' : '') + '</div>' +
+        '<div class="what mono">' + esc(a.cmd) + '</div>' +
+        (hasQuote(a) ? '<div class="quote">' + esc(a.quote) + '</div>' : '<div class="hint">Цитаты в источнике нет.</div>') +
+        '<span class="src">' + esc(a.src) + '</span></div>';
+    });
+    html += '</div>';
+    document.getElementById('cardsView').innerHTML = html;
+  }
+
+  /* ── Вид «Пробелы» ───────────────────────────────────────────────────── */
+  function renderGaps() {
+    var list = F.approvals.filter(function (a) { return a.type === 'gap'; }).filter(searchHit);
+    var html = '<div class="hint">Места, где завод останавливаться не умеет: <b>точки апрува в коде нет</b> вовсе. ' +
+      'Это не поломка, а честно найденная дырка — её видно по тексту правил и по gap-анализу матрицы.</div>';
+    if (!list.length) {
+      html += '<div class="card">Под поиск не подошёл ни один пробел.</div>';
+      document.getElementById('gapsView').innerHTML = html;
+      return;
+    }
+    list.forEach(function (a) {
+      var ref = GAP_REF[a.id] || [];
+      var g = gapEntry(ref[0], ref[1]);
+      html += '<div class="card warn" data-ap="' + esc(a.id) + '">' +
+        '<div class="gap-title">' + esc(a.id) + ' · ' + esc(a.title) + '</div>' +
+        '<div class="hint" style="color:var(--warn-tx)">В коде точки апрува нет.</div>' +
+        '<p style="margin:6px 0"><b>Почему это важно.</b> ' + esc(a.blocks) + '</p>' +
+        '<p style="margin:6px 0"><b>' + esc(GAP_FIX[a.id] || 'Что предлагается: точку апрува нужно ввести в код — это решение владельца.') + '</b></p>' +
+        (g ? '<p style="margin:6px 0">Из gap-анализа матрицы, «' + esc(g.module) + ' · ' + esc(g.aspect) + '»: ' +
+          esc(g.note) + ' <span class="mono" style="font-size:10.5px">' + esc(g.src) + '</span></p>' : '') +
+        '<h4>Что говорит матрица прав</h4>' + rulesHtml(a, 'Правила матрицы этот пробел не описывают.') +
+        '<div class="quote">' + esc(a.src) + '</div>' +
+        '</div>';
+    });
+
+    html += '<h2>Связанные вопросы владельцу</h2><div class="hint">Эти вопросы уже стоят в опроснике: без ответа на них пробелы не закрыть.</div>';
+    ['Q2', 'Q6', 'Q7'].forEach(function (qid) {
+      var q = KZ.openQuestions.filter(function (x) { return x.id === qid; })[0];
+      if (!q) return;
+      html += '<div class="card"><b>' + esc(q.id) + '. ' + esc(q.q) + '</b>' +
+        '<div class="hint">Зачем спрашиваем: ' + esc(q.why) + '</div>' +
+        '<div class="quote">Ответ по умолчанию: ' + esc(q.defaultAnswer) + '</div>' +
+        '<a class="btn" href="questionnaire.html">Открыть опросник владельца</a></div>';
+    });
+
+    document.getElementById('gapsView').innerHTML = html;
+  }
+
+  /* ── Вид «Связь с матрицей» ──────────────────────────────────────────── */
+  function renderMap() {
+    var list = filtered();
+    var html = '<div class="hint">Точка апрува → правила матрицы, которые её поддерживают. Сопоставление сделано по смыслу текстов правил из ' +
+      '<code>kz.data.js</code>: и точка, и правило подтверждены кодом.</div>';
+    if (!list.length) {
+      html += '<div class="card">Под этот фильтр не подошла ни одна точка.</div>';
+      document.getElementById('mapView').innerHTML = html;
+      return;
+    }
+    html += '<table class="tbl"><thead><tr><th>Точка апрува</th><th>Правила матрицы, которые её поддерживают</th></tr></thead><tbody>';
+    list.forEach(function (a) {
+      html += '<tr data-ap="' + esc(a.id) + '"' + (state.selected === a.id ? ' class="sel-row"' : '') + '>' +
+        '<td class="rowhead"><span class="cite">' + esc(a.id) + '</span><br>' + esc(a.title) +
+        '<br><span class="pill ' + gateCls(a.gate) + '">' + esc(gateWord(a.gate)) + '</span></td>' +
+        '<td>' + rulesHtml(a, 'Сопоставления нет: правила матрицы эту точку не описывают.') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('mapView').innerHTML = html;
+  }
+
+  /* ── Правая панель ───────────────────────────────────────────────────── */
+  function renderSide() {
+    var el = document.getElementById('sideContent'), empty = document.getElementById('sideEmpty');
+    if (!state.selected) { el.hidden = true; empty.hidden = false; return; }
+    var a = byId(state.selected);
+    if (!a) { el.hidden = true; empty.hidden = false; return; }
+    empty.hidden = true; el.hidden = false;
+
+    el.innerHTML =
+      '<h3>' + esc(a.id) + ' · ' + esc(a.title) + '</h3>' +
+      '<div style="margin:6px 0"><span class="badge' + (a.type === 'gap' ? ' warn' : '') + '">' + esc(typeLabel(a)) + '</span> ' +
+      '<span class="pill ' + gateCls(a.gate) + '">' + esc(gateWord(a.gate)) + '</span></div>' +
+      (a.type === 'gap' ? '<div class="card warn tight">В коде точки апрува нет — это пробел протокола.</div>' : '') +
+      '<p>' + esc(a.blocks) + '</p>' +
+      '<dl class="kv">' +
+        '<dt>Кто решает</dt><dd>' + esc(a.who) + '</dd>' +
+        '<dt>Чем</dt><dd class="mono">' + esc(a.cmd) + '</dd>' +
+        '<dt>Тип</dt><dd>' + esc(typeLabel(a)) + '</dd>' +
+        '<dt>Гейт</dt><dd>' + esc(gateWord(a.gate)) + '</dd>' +
+      '</dl>' +
+      '<h4>Кто имеет право</h4><div class="quote warn">' + esc(whoPlain(a)) + '</div>' +
+      '<h4>Цитата из источника</h4>' +
+      (hasQuote(a) ? '<div class="quote">' + esc(a.quote) + '</div>' : '<div class="hint">Цитаты в источнике нет — это и есть признак пробела.</div>') +
+      '<h4>Источник</h4><div class="quote">' + esc(a.src) + '</div>' +
+      '<h4>Связанные правила матрицы</h4>' + rulesHtml(a, 'Правил матрицы для этой точки не подобрано.') +
+      '<a class="btn side-link" href="index.html">Открыть матрицу прав</a>';
+
+    document.getElementById('sidePanel').scrollTop = 0;
+  }
+
+  /* ── Общая отрисовка ─────────────────────────────────────────────────── */
+  function renderAll() {
+    document.getElementById('typeFilter').value = state.type;
+    document.getElementById('gateFilter').value = state.gate;
+    var list = filtered();
+    document.getElementById('statusLine').textContent = 'видно точек: ' + list.length + ' из ' + F.approvals.length +
+      (state.type || state.gate || state.search ? ' · фильтр включён' : '');
+    ['list', 'cards', 'gaps', 'map'].forEach(function (v) {
+      document.getElementById(v + 'View').hidden = (state.view !== v);
+    });
+    document.querySelectorAll('#viewSeg button').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.view === state.view);
+    });
+    renderStats();
+    renderTakeaway();
+    if (state.view === 'list') renderList();
+    else if (state.view === 'cards') renderCards();
+    else if (state.view === 'gaps') renderGaps();
+    else renderMap();
+    renderSide();
+  }
+
+  /* ── События ─────────────────────────────────────────────────────────── */
+  document.getElementById('viewSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-view]'); if (!b) return;
+    state.view = b.dataset.view; renderAll();
+  });
+  document.getElementById('typeFilter').addEventListener('change', function (e) {
+    state.type = e.target.value; renderAll();
+  });
+  document.getElementById('gateFilter').addEventListener('change', function (e) {
+    state.gate = e.target.value; renderAll();
+  });
+  document.getElementById('searchInput').addEventListener('input', function (e) {
+    state.search = e.target.value.trim().toLowerCase(); renderAll();
+  });
+  document.getElementById('printBtn').addEventListener('click', function () { window.print(); });
+  document.getElementById('mainWrap').addEventListener('click', function (e) {
+    var el = e.target.closest('[data-ap]'); if (!el) return;
+    if (el.tagName === 'A') e.preventDefault();
+    state.selected = el.getAttribute('data-ap');
+    renderAll();
+  });
+
+  /* ── Старт ───────────────────────────────────────────────────────────── */
+  renderAll();
+}());
+</script>
+</body>
+</html>

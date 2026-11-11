@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Контент-завод — опросник владельца (вход в матрицу прав)</title>
+<link rel="stylesheet" href="kz.css">
+</head>
+<body>
+
+<header class="app">
+  <h1>Контент-завод — опросник владельца</h1>
+  <div class="sub">
+    Семь вопросов, на которые код ответить не может. Матрица собрана по коду и помечена допущениями там, где решать вам.
+    Ответы отсюда становятся правами: заполнили → «Экспорт ответов» → файл <code>kz-answers.json</code> кладётся рядом с матрицей.
+  </div>
+  <div class="toolbar">
+    <span class="badge" id="progressBadge">отвечено 0 из 7</span>
+    <div class="grow"></div>
+    <button class="primary" id="btnExport">Экспорт ответов</button>
+    <button id="btnImport">Загрузить ответы</button>
+    <button id="btnCopy" title="Скопировать одним текстом — удобно вставить в чат помощнику">Скопировать текстом</button>
+    <button class="danger" id="btnReset">Очистить</button>
+    <a class="btn" href="index.html">← Матрица прав</a>
+    <a class="btn" href="protocol-map.html">Карта протокола</a>
+  </div>
+</header>
+
+<div class="legend">
+  <span class="badge">Ответ по умолчанию — то, что уже следует из кода и правил завода</span>
+  <span class="badge draft">Меняете — матрица меняется вместе с ответом</span>
+</div>
+
+<div class="layout wide">
+  <div class="main">
+
+    <div class="card warn">
+      <b>Почему эти вопросы вообще есть.</b> Матрица прав для завода собрана не из фантазии: почти каждая ячейка подтверждена строкой кода.
+      Но семь вещей код не решает за владельца — удаление материалов, сроки хранения, гость, ротация ключей, право агента создавать записи,
+      апрув нового канала. Пока на них нет ответа, матрица честно показывает пометку «допущение».
+    </div>
+
+    <div id="questions"></div>
+
+    <h2>Дополнительно</h2>
+    <div class="card">
+      <label class="inline" style="display:block;margin-bottom:6px">Есть ли роли, которых нет в списке? (через запятую или строками)
+        <textarea id="extraRoles" rows="2" placeholder="например: помощник монтажёра, бухгалтер"></textarea>
+      </label>
+      <label class="inline" style="display:block">Что ещё стоит запретить агентам? (свободная форма)
+        <textarea id="extraBans" rows="3" placeholder="например: не трогать папку ученикам/ без спроса"></textarea>
+      </label>
+    </div>
+
+    <div class="card">
+      <b>Как это уезжает в матрицу.</b>
+      <ul>
+        <li><b>Q2 / Q6</b> — задают право Delete и политику хранения: сейчас в коде Delete нет почти нигде.</li>
+        <li><b>Q3</b> — вводит роль <code>guest</code> и подмножество <code>published_only</code>.</li>
+        <li><b>Q4</b> — окончательно закрывает модуль «Секреты и лицензия» для агентов.</li>
+        <li><b>Q5</b> — подтверждает или отменяет право агента создавать записи <code>pending</code>.</li>
+        <li><b>Q7</b> — закрывает единственный пробел протокола: подключение нового канала.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<footer class="app" style="padding:10px 16px;color:var(--muted);font-size:11.5px;border-top:1px solid var(--border);background:var(--panel);position:static;">
+  Схема ответов: <code>kz-answers/1</code>. Файл ответов не перезаписывает матрицу сам — его применяет владелец или помощник.
+</footer>
+
+<script src="kz.data.js"></script>
+<script>
+(function () {
+  'use strict';
+  var KZ = window.KZ;
+  if (!KZ) { document.body.innerHTML = '<p style="padding:20px">Не загрузился kz.data.js</p>'; return; }
+
+  var STORAGE = 'kz_questionnaire_v1';
+  var answers = {};
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(STORAGE);
+      if (raw) answers = JSON.parse(raw) || {};
+    } catch (e) {}
+  }
+  function save() {
+    try { localStorage.setItem(STORAGE, JSON.stringify(answers)); } catch (e) {}
+    var n = KZ.openQuestions.filter(function (q) { return (answers[q.id] || {}).text; }).length;
+    document.getElementById('progressBadge').textContent = 'отвечено ' + n + ' из ' + KZ.openQuestions.length;
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function render() {
+    var html = KZ.openQuestions.map(function (q, i) {
+      var a = answers[q.id] || {};
+      return '<div class="card" data-q="' + q.id + '">' +
+        '<h3 style="margin-top:0">' + (i + 1) + '. ' + esc(q.q) + '</h3>' +
+        '<div class="hint">' + esc(q.why) + '</div>' +
+        '<div class="quote warn"><b>Ответ по умолчанию (из кода):</b> ' + esc(q.defaultAnswer) + '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0">' +
+        '<button data-keep="' + q.id + '" class="' + (a.keep ? 'primary' : '') + '">Оставить как в коде</button>' +
+        '<button data-change="' + q.id + '" class="' + (a.keep ? '' : 'primary') + '">Мой ответ</button>' +
+        '</div>' +
+        '<textarea rows="2" data-text="' + q.id + '" placeholder="ответ владельца своими словами">' + esc(a.text || '') + '</textarea>' +
+        '</div>';
+    }).join('');
+    document.getElementById('questions').innerHTML = html;
+    save();
+  }
+
+  function setAnswer(id, patch) {
+    answers[id] = Object.assign({}, answers[id] || {}, patch);
+    save();
+  }
+
+  document.getElementById('questions').addEventListener('click', function (e) {
+    var keep = e.target.closest('button[data-keep]');
+    var change = e.target.closest('button[data-change]');
+    if (keep) {
+      var q = KZ.openQuestions.filter(function (x) { return x.id === keep.dataset.keep; })[0];
+      setAnswer(keep.dataset.keep, { keep: true, text: q.defaultAnswer });
+      render();
+    }
+    if (change) {
+      setAnswer(change.dataset.change, { keep: false });
+      render();
+      var ta = document.querySelector('textarea[data-text="' + change.dataset.change + '"]');
+      if (ta) ta.focus();
+    }
+  });
+
+  document.getElementById('questions').addEventListener('input', function (e) {
+    var ta = e.target.closest('textarea[data-text]');
+    if (ta) setAnswer(ta.dataset.text, { text: ta.value });
+  });
+
+  function buildExport() {
+    return {
+      schema: 'kz-answers/1',
+      project: KZ.project,
+      answered_at: new Date().toISOString(),
+      matrix_version: KZ.version,
+      answers: KZ.openQuestions.map(function (q) {
+        var a = answers[q.id] || {};
+        return {
+          id: q.id,
+          question: q.q,
+          code_default: q.defaultAnswer,
+          decision: a.keep ? 'оставить как в коде' : (a.text ? 'ответ владельца' : 'без ответа'),
+          text: a.text || q.defaultAnswer,
+          is_default: !!a.keep || !a.text
+        };
+      }),
+      extra_roles: (document.getElementById('extraRoles').value || '').split(/[\n,;]+/).map(function (s) { return s.trim(); }).filter(Boolean),
+      extra_agent_bans: document.getElementById('extraBans').value || ''
+    };
+  }
+
+  function download(name, text) {
+    var blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+  }
+
+  document.getElementById('btnExport').addEventListener('click', function () {
+    download('kz-answers.json', JSON.stringify(buildExport(), null, 2));
+  });
+
+  document.getElementById('btnImport').addEventListener('click', function () {
+    var inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.json,application/json';
+    inp.addEventListener('change', function () {
+      var f = inp.files[0]; if (!f) return;
+      var r = new FileReader();
+      r.onload = function () {
+        try {
+          var data = JSON.parse(String(r.result));
+          (data.answers || []).forEach(function (a) {
+            answers[a.id] = { text: a.text, keep: !!a.is_default };
+          });
+          if (data.extra_roles) document.getElementById('extraRoles').value = data.extra_roles.join(', ');
+          if (data.extra_agent_bans) document.getElementById('extraBans').value = data.extra_agent_bans;
+          render();
+          alert('Ответы загружены.');
+        } catch (e) { alert('Не разобрал файл: ' + e.message); }
+      };
+      r.readAsText(f, 'utf-8');
+    });
+    inp.click();
+  });
+
+  document.getElementById('btnCopy').addEventListener('click', function () {
+    var data = buildExport();
+    var lines = ['Ответы владельца по матрице прав Контент-завода (' + data.answered_at.slice(0, 10) + ')', ''];
+    data.answers.forEach(function (a) { lines.push(a.id + '. ' + a.question); lines.push('   → ' + a.text + (a.is_default ? '  [как в коде]' : '  [решение владельца]')); lines.push(''); });
+    if (data.extra_roles.length) lines.push('Дополнительные роли: ' + data.extra_roles.join(', '));
+    if (data.extra_agent_bans) lines.push('Что ещё запретить агентам: ' + data.extra_agent_bans);
+    var text = lines.join('\n');
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(function () { alert('Скопировано. Можно вставить в чат помощнику.'); },
+        function () { window.prompt('Скопируйте текст:', text); });
+    } else { window.prompt('Скопируйте текст:', text); }
+  });
+
+  document.getElementById('btnReset').addEventListener('click', function () {
+    if (!confirm('Очистить все ответы?')) return;
+    answers = {};
+    document.getElementById('extraRoles').value = '';
+    document.getElementById('extraBans').value = '';
+    render();
+  });
+
+  load(); render();
+}());
+</script>
+</body>
+</html>

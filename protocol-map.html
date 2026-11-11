@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Контент-завод — карта протокола: кто → кому → что апрувит</title>
+<link rel="stylesheet" href="kz.css">
+</head>
+<body>
+
+<header class="app">
+  <h1>Контент-завод — карта протокола</h1>
+  <div class="sub">
+    Кто → кому → что передаёт на решение. Плюс отдельная колонка «никому»: то, что не выдано ни одной роли.
+    Основа — <code>kz.flow.js</code> (связи протокола) и <code>kz.data.js</code> (правила матрицы).
+  </div>
+  <div class="toolbar">
+    <div class="seg" id="viewSeg">
+      <button data-view="map" class="active">Карта</button>
+      <button data-view="table">Таблица</button>
+      <button data-view="deny">Никому</button>
+      <button data-view="rules">Правила передачи</button>
+    </div>
+    <label class="inline">Фильтр
+      <select id="clsFilter">
+        <option value="">все связи</option>
+        <option value="agent">от агентов</option>
+        <option value="human">от людей</option>
+        <option value="deny">запреты и пробелы</option>
+      </select>
+    </label>
+    <label class="inline">Поиск <input type="search" id="searchInput" placeholder="кто, кому, что…" style="width:170px"></label>
+    <div class="grow"></div>
+    <button id="btnPrint">Печать</button>
+    <a class="btn" href="index.html">← Матрица прав</a>
+    <a class="btn" href="process.html">Плеер сценариев</a>
+    <a class="btn" href="approve.html">Протокол апрувов</a>
+  </div>
+</header>
+
+<div class="legend">
+  <span class="badge human">от человека</span>
+  <span class="badge agent">от агента или движка</span>
+  <span class="badge warn">запрет или пробел</span>
+  <span class="badge" id="statusLine"></span>
+</div>
+
+<div class="layout wide">
+  <div class="main">
+    <div class="stats" id="statsRow"></div>
+    <div id="viewRoot"></div>
+  </div>
+</div>
+
+<footer class="app" style="padding:10px 16px;color:var(--muted);font-size:11.5px;border-top:1px solid var(--border);background:var(--panel);position:static;">
+  Каждая связь подтверждена кодом: у неё есть файл и строка. Связей, придуманных «по логике», здесь нет.
+</footer>
+
+<script src="kz.data.js"></script>
+<script src="kz.flow.js"></script>
+<script>
+(function () {
+  'use strict';
+  var KZ = window.KZ, F = window.KZFLOW;
+  if (!KZ || !F) { document.body.innerHTML = '<p style="padding:20px">Не загрузились файлы данных</p>'; return; }
+
+  var state = { view: 'map', cls: '', q: '' };
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function visible(e) {
+    if (state.cls && e.cls !== state.cls) return false;
+    if (state.q) {
+      var hay = (e.fromTitle + ' ' + e.toTitle + ' ' + e.what + ' ' + e.src).toLowerCase();
+      if (hay.indexOf(state.q) === -1) return false;
+    }
+    return true;
+  }
+
+  /* ── Вид «Карта»: колонки по получателю ──────────────────────────────── */
+  function renderMap() {
+    var edges = F.protocol.filter(visible);
+    var targets = [];
+    edges.forEach(function (e) {
+      if (targets.indexOf(e.toTitle) === -1) targets.push(e.toTitle);
+    });
+    var html = '<div class="hint">Читается слева направо: карточка в колонке получателя означает «этот передаёт ему то-то». ' +
+      'Красная карточка — запрет или пробел протокола.</div><div class="map-grid">';
+    targets.forEach(function (t) {
+      var list = edges.filter(function (e) { return e.toTitle === t; });
+      html += '<div class="map-col"><h3>' + esc(t) + ' <span class="badge">' + list.length + '</span></h3>' +
+        list.map(function (e) {
+          return '<div class="map-card ' + e.cls + '">' +
+            '<span class="who">' + esc(e.fromTitle) + '</span> <span class="arrow">→</span> <span class="who">' + esc(e.toTitle) + '</span>' +
+            '<div class="what">' + esc(e.what) + '</div>' +
+            '<span class="src">' + esc(e.src) + '</span></div>';
+        }).join('') + '</div>';
+    });
+    html += '</div>';
+
+    var denyEdges = F.protocol.filter(function (e) { return e.cls === 'deny'; });
+    if (denyEdges.length) {
+      html += '<h2>Границы: чего не бывает</h2><div class="grid c2">' + denyEdges.map(function (e) {
+        return '<div class="card warn"><b>' + esc(e.fromTitle) + '</b> <span class="arrow">→</span> <b>' + esc(e.toTitle) + '</b>' +
+          '<div style="margin-top:4px">' + esc(e.what) + '</div>' +
+          '<div class="mono" style="font-size:10.5px;margin-top:4px">' + esc(e.src) + '</div></div>';
+      }).join('') + '</div>';
+    }
+    document.getElementById('viewRoot').innerHTML = html;
+  }
+
+  /* ── Вид «Таблица» ───────────────────────────────────────────────────── */
+  function renderTable() {
+    var edges = F.protocol.filter(visible).slice().sort(function (a, b) { return a.order - b.order; });
+    var html = '<table class="tbl"><thead><tr><th>#</th><th>От кого</th><th>Кому</th><th>Что передаётся на решение</th><th>Тип</th><th>Источник</th></tr></thead><tbody>';
+    edges.forEach(function (e) {
+      var cls = e.cls === 'deny' ? 'no' : (e.cls === 'agent' ? 'part' : 'ok');
+      var label = e.cls === 'deny' ? 'запрет / пробел' : (e.cls === 'agent' ? 'агент' : 'человек');
+      html += '<tr><td class="cite">' + e.order + '</td><td class="rowhead">' + esc(e.fromTitle) + '</td><td>' + esc(e.toTitle) + '</td>' +
+        '<td>' + esc(e.what) + '</td><td><span class="pill ' + cls + '">' + label + '</span></td>' +
+        '<td class="cite">' + esc(e.src) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('viewRoot').innerHTML = html;
+  }
+
+  /* ── Вид «Никому» ────────────────────────────────────────────────────── */
+  function renderDeny() {
+    var html = '<div class="card warn"><b>Три вещи, которых в протоколе нет.</b> ' +
+      'Они не «забыты в матрице» — их нет в коде, и именно поэтому матрица не может выдать на них право.</div>';
+    html += '<div class="grid c2">' +
+      '<div class="card"><h3 style="margin-top:0">1. Удаление материалов</h3>' +
+      '<p>Удаления медиа в коде нет ни у одной роли. Есть только удаление записи очереди — и оно происходит без подтверждения.</p>' +
+      '<div class="quote">publish_queue.py:664-670 cmd_remove(); updater.py:123-130 (photos/, talking/, music/, out_ — запрещённая зона)</div>' +
+      '<div class="hint">Что предлагается: ввести архивирование («4 Опубликовано» объявлена контрактом, но ни одна функция в неё не пишет) и политику хранения.</div></div>' +
+      '<div class="card"><h3 style="margin-top:0">2. Апрув нового канала</h3>' +
+      '<p>Мастер подключения не имеет ни флага --send, ни гейта: единственная защита — предупреждение про платный тариф.</p>' +
+      '<div class="quote">проверено: smmbox_connect.py — только --finish/--check/--start</div>' +
+      '<div class="hint">Что предлагается: считать подключение канала решением владельца (вопрос 7 опросника).</div></div>' +
+      '<div class="card"><h3 style="margin-top:0">3. Автоматическая отправка из контент-плана</h3>' +
+      '<p>Гейт плана не публикует: он печатает команду и удерживает слот. Мост «одобренный слот → запись очереди» отсутствует.</p>' +
+      '<div class="quote">modules/content_plan/gate.py:26-30 REAL_PUBLISH_IMPLEMENTED = False; gate.py:513-539</div>' +
+      '<div class="hint">Это не поломка, а осознанный стоп прототипа. В матрице он отражён правилом R-CP-7.</div></div>' +
+      '<div class="card"><h3 style="margin-top:0">4. Право удаления секретов</h3>' +
+      '<p>Не выдано никому, включая владельца: ключ перевыпускают, а не стирают файл. Обновление завода эту зону не трогает.</p>' +
+      '<div class="quote">updater.py:123-130; github_backup.py:162-163 _DENY_NAMES</div>' +
+      '<div class="hint">Что предлагается: ничего не менять — это работающая защита.</div></div>' +
+      '</div>';
+
+    var denyEdges = F.protocol.filter(function (e) { return e.cls === 'deny'; });
+    html += '<h2>Связи-запреты в карте протокола</h2><table class="tbl"><thead><tr><th>От кого</th><th>Кому</th><th>Что</th><th>Источник</th></tr></thead><tbody>';
+    denyEdges.forEach(function (e) {
+      html += '<tr><td class="rowhead">' + esc(e.fromTitle) + '</td><td>' + esc(e.toTitle) + '</td><td>' + esc(e.what) + '</td><td class="cite">' + esc(e.src) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('viewRoot').innerHTML = html;
+  }
+
+  /* ── Вид «Правила передачи» ──────────────────────────────────────────── */
+  function renderRules() {
+    var ids = ['R-Q-8', 'R-AGT-1', 'R-AGT-2', 'R-Q-2', 'R-Q-3', 'R-Q-4', 'R-Q-9',
+      'R-CP-2', 'R-CP-3', 'R-CP-5', 'R-CP-7', 'R-GATE-1', 'R-ACT-1', 'R-CONSENT-1',
+      'R-BKP-1', 'R-SEC-2', 'R-CH-2', 'R-MONEY-1', 'R-WORK-1'];
+    var html = '<div class="hint">Правила, на которых держится протокол: кто кому что может передать и что из этого запрещено навсегда.</div>';
+    html += '<table class="tbl"><thead><tr><th>ID</th><th>Правило</th><th>Что именно требуется</th><th>Источник</th></tr></thead><tbody>';
+    ids.forEach(function (id) {
+      var r = KZ.rules[id];
+      if (!r) return;
+      html += '<tr><td class="cite">' + esc(id) + '</td><td class="rowhead">' + esc(r.title) + '</td><td>' + esc(r.text) + '</td><td class="cite">' + esc(r.src) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('viewRoot').innerHTML = html;
+  }
+
+  function renderStats() {
+    var edges = F.protocol;
+    var fromAgent = edges.filter(function (e) { return e.cls === 'agent'; }).length;
+    var fromHuman = edges.filter(function (e) { return e.cls === 'human'; }).length;
+    var denies = edges.filter(function (e) { return e.cls === 'deny'; }).length;
+    document.getElementById('statsRow').innerHTML =
+      '<div class="stat"><b>' + edges.length + '</b><span>связей протокола</span></div>' +
+      '<div class="stat"><b>' + fromAgent + '</b><span>от агентов</span></div>' +
+      '<div class="stat"><b>' + fromHuman + '</b><span>от людей</span></div>' +
+      '<div class="stat"><b>' + denies + '</b><span>запретов и пробелов</span></div>' +
+      '<div class="stat"><b>' + F.stats.approvals + '</b><span>точек апрува</span></div>' +
+      '<div class="stat"><b>' + KZ.stats.rules + '</b><span>правил в матрице</span></div>';
+  }
+
+  function renderAll() {
+    document.getElementById('statusLine').textContent = 'связей: ' + F.protocol.length + ' · правил: ' + KZ.stats.rules;
+    document.querySelectorAll('#viewSeg button').forEach(function (b) { b.classList.toggle('active', b.dataset.view === state.view); });
+    renderStats();
+    if (state.view === 'map') renderMap();
+    else if (state.view === 'table') renderTable();
+    else if (state.view === 'deny') renderDeny();
+    else renderRules();
+  }
+
+  document.getElementById('viewSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-view]'); if (!b) return;
+    state.view = b.dataset.view; renderAll();
+  });
+  document.getElementById('clsFilter').addEventListener('change', function (e) { state.cls = e.target.value; renderAll(); });
+  document.getElementById('searchInput').addEventListener('input', function (e) { state.q = e.target.value.trim().toLowerCase(); renderAll(); });
+  document.getElementById('btnPrint').addEventListener('click', function () { window.print(); });
+
+  renderAll();
+}());
+</script>
+</body>
+</html>

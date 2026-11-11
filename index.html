@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Контент-завод — матрица прав CRUD (Роль × Статус × Поле × Модуль)</title>
+<link rel="stylesheet" href="kz.css">
+</head>
+<body>
+
+<header class="app">
+  <h1>Контент-завод — матрица прав CRUD</h1>
+  <div class="sub">
+    Роль × Статус × Поле × Модуль. Четыре действия: <b>C</b>reate, <b>R</b>ead, <b>U</b>pdate, <b>D</b>elete.
+    Плюс то, чего нет у «Витавто»: <b>actor_type</b> (человек / ИИ-агент) и <b>constraint</b> — ограничение со ссылкой на код.
+    Источник: <code id="rootPath">C:/soft/python/kontent-zavod</code>. Ни одна строка не придумана: у ячейки либо строка кода, либо решение владельца.
+  </div>
+  <div class="toolbar">
+    <div class="seg" id="levelSeg"></div>
+    <div class="seg" id="viewSeg">
+      <button data-view="matrix" class="active">Матрица</button>
+      <button data-view="agents">Красные линии агентов</button>
+      <button data-view="rules">Правила</button>
+      <button data-view="gaps">Gap-анализ</button>
+      <button data-view="roles">Роли</button>
+    </div>
+    <label class="inline">Поиск <input type="search" id="searchInput" placeholder="модуль, поле, правило…" style="width:190px"></label>
+    <div class="grow"></div>
+    <button id="btnToggleEmpty" class="toggle active" title="Показывать поля, где у роли вовсе нет прав">Показывать запреты</button>
+    <button id="btnExport">Экспорт JSON</button>
+    <button id="btnImport">Импорт JSON</button>
+    <button id="btnReset" class="danger">Сбросить правки</button>
+    <a class="btn" href="process.html">Плеер сценариев →</a>
+    <a class="btn" href="approve.html">Протокол апрувов</a>
+    <a class="btn" href="protocol-map.html">Карта протокола</a>
+  </div>
+</header>
+
+<div class="legend">
+  <span><span class="sw allow"></span>разрешено</span>
+  <span><span class="sw conditional"></span>только при ограничении</span>
+  <span><span class="sw deny"></span>запрещено</span>
+  <span><span class="sw subset"></span>разрешено по подмножеству (только одобренное / опубликованное / смена статуса)</span>
+  <span class="badge" id="statusLine"></span>
+  <span class="badge draft" id="editBadge" hidden></span>
+</div>
+
+<div class="layout">
+  <div class="main">
+
+    <div class="roles-tabs" id="roleTabs"></div>
+    <div class="hint" id="roleHint"></div>
+
+    <div class="stats" id="statsRow"></div>
+
+    <div class="view-panel" id="matrixView">
+      <div class="hint">
+        Строки — модули и их поля. Столбцы — статусы выбранной оси.
+        В ячейке четыре буквы: <b>C</b> R U D. Клик по ячейке — подробности справа: ограничения и цитаты из кода.
+        <span class="badge">Ось «единица контента» и ось «запись очереди» — разные вещи, их нельзя путать</span>
+      </div>
+      <div class="matrix-wrap"><table class="matrix" id="matrixTable"></table></div>
+    </div>
+
+    <div class="view-panel" id="agentsView" hidden></div>
+    <div class="view-panel" id="rulesView" hidden></div>
+    <div class="view-panel" id="gapsView" hidden></div>
+    <div class="view-panel" id="rolesView" hidden></div>
+
+  </div>
+
+  <aside class="side" id="sidePanel">
+    <div class="empty" id="sideEmpty">
+      Кликните ячейку матрицы — здесь появятся: что именно разрешено, каким ограничением это ограничено,
+      откуда взято (файл и строка) и что из этого следует для роли.
+    </div>
+    <div id="sideContent" hidden></div>
+  </aside>
+</div>
+
+<footer class="app" style="padding:10px 16px;color:var(--muted);font-size:11.5px;border-top:1px solid var(--border);background:var(--panel);position:static;">
+  Схема данных: <code>kz-access-matrix/1</code>, файл <code>kz.data.js</code>.
+  Ограничения вытащены цитатами из кода: <code>publish_queue.py</code>, <code>updater.py</code>, <code>github_backup.py</code>,
+  <code>checks.py</code>, <code>activation_gate.py</code>, <code>modules/content_plan/*</code>, <code>health_report.py</code>,
+  <code>ПРАВИЛА_ЗАВОДА.md</code>, <code>CLAUDE.md</code>. Где источника нет — стоит пометка «допущение» и вопрос владельцу.
+</footer>
+
+<script src="kz.data.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var KZ = window.KZ;
+  if (!KZ) { document.body.innerHTML = '<p style="padding:20px">Не загрузился kz.data.js</p>'; return; }
+
+  /* ── Индексы ─────────────────────────────────────────────────────────── */
+  var ROLES_BY_ID = {}, MODULES_BY_ID = {}, FIELDS_BY_ID = {}, LEVELS_BY_ID = {};
+  KZ.roles.forEach(function (r) { ROLES_BY_ID[r.id] = r; });
+  KZ.modules.forEach(function (m) {
+    MODULES_BY_ID[m.id] = m;
+    m.fields.forEach(function (f) { FIELDS_BY_ID[f.id] = { field: f, module: m }; });
+  });
+  KZ.levels.forEach(function (l) { LEVELS_BY_ID[l.id] = l; });
+
+  var DENY = { c: 'deny', r: 'deny', u: 'deny', d: 'deny' };
+  var STORAGE = 'kz_access_matrix_edits_v1';
+
+  var state = {
+    level: 'unit',
+    role: KZ.roles[0].id,
+    view: 'matrix',
+    statusIdx: { unit: 0, queue: 0 },
+    edits: {},          // "level|role|status|field" -> {c,r,u,d,constraints,note}
+    search: '',
+    showDeny: true,
+    selected: null      // {field, status}
+  };
+
+  /* ── Загрузка правок ─────────────────────────────────────────────────── */
+  function loadEdits() {
+    try {
+      var raw = localStorage.getItem(STORAGE);
+      if (raw) state.edits = JSON.parse(raw) || {};
+    } catch (e) { /* file:// без localStorage — работаем в памяти */ }
+  }
+  function saveEdits() {
+    try { localStorage.setItem(STORAGE, JSON.stringify(state.edits)); } catch (e) {}
+    var n = Object.keys(state.edits).length;
+    var el = document.getElementById('editBadge');
+    el.hidden = n === 0;
+    el.textContent = 'правки владельца: ' + n;
+  }
+  function editKey(level, role, status, field) { return [level, role, status, field].join('|'); }
+
+  /* ── Ядро: права конкретной ячейки ───────────────────────────────────── */
+  function baseGrant(roleId, moduleId) {
+    var byModule = KZ.grants[moduleId] || {};
+    return byModule[roleId] || DENY;
+  }
+
+  function computeCell(levelId, roleId, statusId, fieldId) {
+    var info = FIELDS_BY_ID[fieldId];
+    if (!info) return null;
+    var moduleId = info.module.id;
+    var base = baseGrant(roleId, moduleId);
+    var out = {
+      c: base.c, r: base.r, u: base.u, d: base.d,
+      constraints: (base.constraints || []).slice(),
+      src: (base.src || []).slice(),
+      note: base.note || '',
+      layers: [{ kind: 'модуль', title: 'Права роли на модуль «' + info.module.title + '»', src: base.src || [], note: base.note || '' }]
+    };
+
+    // 1. исключения по полю
+    KZ.fieldOverrides.forEach(function (o) {
+      if (o.role !== roleId || o.field !== fieldId) return;
+      ['c', 'r', 'u', 'd'].forEach(function (k) { if (o.patch[k]) out[k] = o.patch[k]; });
+      out.src = out.src.concat(o.src || []);
+      out.layers.push({ kind: 'поле', title: 'Исключение по полю', src: o.src || [], note: o.note || '' });
+    });
+
+    // 2. исключения по статусу (роль = null → все роли; модуль = null → все модули)
+    KZ.statusOverrides.forEach(function (o) {
+      if (o.level !== levelId || o.status !== statusId) return;
+      if (o.role && o.role !== roleId) return;
+      if (o.module && o.module !== moduleId) return;
+      ['c', 'r', 'u', 'd'].forEach(function (k) { if (o.patch[k]) out[k] = o.patch[k]; });
+      out.src = out.src.concat(o.src || []);
+      out.layers.push({ kind: 'статус', title: 'Исключение по статусу', src: o.src || [], note: o.note || '' });
+    });
+
+    // 3. правка владельца поверх всего
+    var ek = editKey(levelId, roleId, statusId, fieldId);
+    if (state.edits[ek]) {
+      var e = state.edits[ek];
+      ['c', 'r', 'u', 'd'].forEach(function (k) { if (e[k]) out[k] = e[k]; });
+      out.layers.push({ kind: 'правка', title: 'Правка владельца (в этой сессии / из файла)', src: ['правка в браузере'], note: e.note || '' });
+      out.edited = true;
+    }
+
+    out.moduleId = moduleId;
+    out.fieldId = fieldId;
+    out.roleId = roleId;
+    out.statusId = statusId;
+    out.levelId = levelId;
+    out.isAssumption = out.src.some(function (s) { return String(s).indexOf('assumption') === 0; });
+    var anyAllow = ['c', 'r', 'u', 'd'].some(function (k) {
+      var v = out[k];
+      return v && v !== 'deny';
+    });
+    out.allDeny = !anyAllow;
+    return out;
+  }
+
+  function statuses() { return LEVELS_BY_ID[state.level].statuses; }
+  function curStatus() { return statuses()[state.statusIdx[state.level]] || statuses()[0]; }
+  function modulesForLevel() {
+    return KZ.modules.filter(function (m) { return m.axis.indexOf(state.level) !== -1; });
+  }
+  function ruleText(id) {
+    var r = KZ.rules[id];
+    return r ? r.text : '(правило не найдено: ' + id + ')';
+  }
+  function ruleTitle(id) { var r = KZ.rules[id]; return r ? r.title : id; }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function rightCls(v) { return (KZ.rights[v] && KZ.rights[v].cls) || 'deny'; }
+  function rightShort(v) { return (KZ.rights[v] && KZ.rights[v].short) || v; }
+
+  /* ── Отрисовка шапки и вкладок ───────────────────────────────────────── */
+  function renderLevelSeg() {
+    document.getElementById('levelSeg').innerHTML = KZ.levels.map(function (l) {
+      return '<button data-level="' + l.id + '" class="' + (l.id === state.level ? 'active' : '') + '">' + esc(l.title) + '</button>';
+    }).join('');
+  }
+
+  function renderRoleTabs() {
+    var html = '';
+    KZ.roleGroups.forEach(function (grp, gi) {
+      if (gi) html += '<span class="sep"></span>';
+      KZ.roles.filter(function (r) { return grp.types.indexOf(r.type) !== -1; }).forEach(function (r) {
+        html += '<button data-role="' + r.id + '" class="' + (r.type === 'agent' ? 'agent' : '') + (r.id === state.role ? ' active' : '') + '">' +
+          esc(r.title) + '</button>';
+      });
+    });
+    document.getElementById('roleTabs').innerHTML = html;
+    var r = ROLES_BY_ID[state.role];
+    document.getElementById('roleHint').innerHTML =
+      '<span class="badge ' + (r.type === 'agent' ? 'agent' : 'human') + '">' + KZ.actorTypes[r.type].title + '</span> ' +
+      esc(r.what) + ' <span class="mono" style="color:var(--muted)">' + esc(r.src) + '</span>';
+  }
+
+  function renderStats() {
+    var s = KZ.stats;
+    var cells = 0, deny = 0;
+    modulesForLevel().forEach(function (m) {
+      m.fields.forEach(function (f) {
+        statuses().forEach(function (st) {
+          var c = computeCell(state.level, state.role, st.id, f.id);
+          if (c.allDeny) deny++; else cells++;
+        });
+      });
+    });
+    document.getElementById('statsRow').innerHTML =
+      '<div class="stat"><b>' + s.roles + '</b><span>ролей (' + s.humans + ' человек, ' + s.agents + ' агент)</span></div>' +
+      '<div class="stat"><b>' + s.modules + '</b><span>модулей</span></div>' +
+      '<div class="stat"><b>' + s.fields + '</b><span>полей</span></div>' +
+      '<div class="stat"><b>' + s.rules + '</b><span>правил-ограничений</span></div>' +
+      '<div class="stat"><b>' + cells + '</b><span>ячеек с правами у роли</span></div>' +
+      '<div class="stat"><b>' + deny + '</b><span>ячеек «запрещено»</span></div>' +
+      '<div class="stat"><b>' + s.gapNone + '</b><span>разрывов «нет»</span></div>' +
+      '<div class="stat"><b>' + s.assumptions + '</b><span>допущений</span></div>';
+  }
+
+  /* ── Отрисовка матрицы ───────────────────────────────────────────────── */
+  function cellHtml(cell) {
+    if (!cell) return '';
+    var chips = KZ.rightKeys.map(function (k) {
+      return '<span class="rc ' + rightCls(cell[k]) + '" title="' + esc(KZ.rightNames[k] + ': ' + (KZ.rights[cell[k]] ? KZ.rights[cell[k]].title : cell[k])) + '">' + k.toUpperCase() + '</span>';
+    }).join('');
+    var cons = '';
+    if (cell.constraints.length) {
+      cons = '<div class="constraints">' + cell.constraints.slice(0, 3).map(function (id) {
+        var t = ruleTitle(id) + ' — ' + ruleText(id);
+        return '<span class="rchip" title="' + esc(t) + '">' + esc(id.replace(/^R-/, '')) + '</span>';
+      }).join('') + (cell.constraints.length > 3 ? '<span class="rchip">+' + (cell.constraints.length - 3) + '</span>' : '') + '</div>';
+    }
+    var marks = '';
+    if (cell.isAssumption) marks += '<span class="srcdot assume" title="Есть допущение — уточнить у владельца"></span>';
+    if (cell.edited) marks += '<span class="srcdot" style="background:var(--accent)" title="Правка владельца"></span>';
+    return '<div class="cell-stack"><div class="rights">' + chips + '</div>' + cons + (marks ? '<div>' + marks + '</div>' : '') + '</div>';
+  }
+
+  function renderMatrix() {
+    var mods = modulesForLevel();
+    var sts = statuses();
+    var html = '<thead><tr><th class="col-head">Модуль · Поле</th>';
+    sts.forEach(function (s, i) {
+      html += '<th data-status-idx="' + i + '"' + (i === state.statusIdx[state.level] ? ' style="color:var(--accent)"' : '') + '>' + esc(s.title) + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+
+    mods.forEach(function (m) {
+      html += '<tr class="grp-row" data-module="' + m.id + '"><td colspan="' + (sts.length + 1) + '">' +
+        '📁 ' + esc(m.title) + ' <span class="mono" style="font-weight:400">' + esc(m.files.join(' · ')) + '</span></td></tr>';
+      m.fields.forEach(function (f) {
+        var anyRight = sts.some(function (st) { return !computeCell(state.level, state.role, st.id, f.id).allDeny; });
+        var hide = (!state.showDeny && !anyRight);
+        if (state.search) {
+          var q = state.search.toLowerCase();
+          var hay = (m.title + ' ' + f.title + ' ' + m.files.join(' ') + ' ' + f.kind).toLowerCase();
+          if (hay.indexOf(q) === -1) hide = true;
+        }
+        html += '<tr data-field="' + f.id + '" class="' + (hide ? 'hidden' : '') + '">' +
+          '<td class="col-head"><b>' + esc(f.title) + '</b><br>' +
+          '<span class="mono" style="color:var(--muted);font-size:10.5px">' + esc(f.kind) + ' · ' + esc(f.src) + '</span></td>';
+        sts.forEach(function (st, i) {
+          var cell = computeCell(state.level, state.role, st.id, f.id);
+          var sel = state.selected && state.selected.field === f.id && state.selected.status === i;
+          html += '<td class="matrix-cell' + (sel ? ' selected' : '') + '" data-field="' + f.id + '" data-status-idx="' + i + '">' +
+            cellHtml(cell) + '</td>';
+        });
+        html += '</tr>';
+      });
+    });
+    html += '</tbody>';
+    document.getElementById('matrixTable').innerHTML = html;
+  }
+
+  /* ── Подробности ячейки справа ───────────────────────────────────────── */
+  function renderSide() {
+    var el = document.getElementById('sideContent');
+    var empty = document.getElementById('sideEmpty');
+    if (!state.selected) { el.hidden = true; empty.hidden = false; return; }
+    empty.hidden = true; el.hidden = false;
+
+    var f = FIELDS_BY_ID[state.selected.field];
+    var st = statuses()[state.selected.status];
+    var cell = computeCell(state.level, state.role, st.id, state.selected.field);
+    var role = ROLES_BY_ID[state.role];
+    var m = MODULES_BY_ID[cell.moduleId];
+
+    var rightsHtml = KZ.rightKeys.map(function (k) {
+      var opts = Object.keys(KZ.rights).map(function (v) {
+        return '<option value="' + v + '"' + (v === cell[k] ? ' selected' : '') + '>' + esc(KZ.rights[v].title) + '</option>';
+      }).join('');
+      return '<tr><td><b>' + k.toUpperCase() + '</b></td><td>' + esc(KZ.rightNames[k].split('—')[1].trim()) + '</td>' +
+        '<td><select data-right="' + k + '">' + opts + '</select></td></tr>';
+    }).join('');
+
+    var constraintsHtml = cell.constraints.length ? cell.constraints.map(function (id) {
+      return '<div class="rule-item"><span class="rid">' + esc(id) + '</span> ' +
+        '<div class="rtitle"><b>' + esc(ruleTitle(id)) + '</b></div>' +
+        '<div>' + esc(ruleText(id)) + '</div>' +
+        '<div class="rsrc">' + esc((KZ.rules[id] || {}).src || '') + '</div></div>';
+    }).join('') : '<div class="hint">Ограничений нет — право действует без оговорок.</div>';
+
+    var layersHtml = cell.layers.map(function (l) {
+      return '<div class="card tight"><b>' + esc(l.kind) + ':</b> ' + esc(l.title) +
+        (l.note ? '<div class="hint" style="margin:4px 0 0">' + esc(l.note) + '</div>' : '') +
+        (l.src && l.src.length ? '<div class="quote">' + l.src.map(esc).join('\n') + '</div>' : '') + '</div>';
+    }).join('');
+
+    el.innerHTML =
+      '<h3>' + esc(f.field.title) + '</h3>' +
+      '<div class="hint">модуль «' + esc(m.title) + '» · статус «' + esc(st.title) + '» · роль «' + esc(role.title) + '»</div>' +
+      (cell.isAssumption ? '<div class="card warn tight">В этой ячейке есть <b>допущение</b>: строка кода её не подтверждает. Смотрите вопросы владельцу в опроснике.</div>' : '') +
+      (cell.note ? '<div class="quote warn">' + esc(cell.note) + '</div>' : '') +
+      '<table class="tbl"><tbody>' + rightsHtml + '</tbody></table>' +
+      '<div class="hint">Значения: разрешено / запрещено / только при ограничении / по подмножеству (только одобренное, только опубликованное, только смена статуса).</div>' +
+      '<h4>Ограничения</h4>' + constraintsHtml +
+      '<h4>Откуда взято</h4>' + layersHtml +
+      '<h4>Правка владельца</h4>' +
+      '<div class="hint">Правку можно внести здесь — она живёт только в браузере и выгружается кнопкой «Экспорт JSON».</div>' +
+      '<textarea id="editNote" rows="2" placeholder="почему так (необязательно)">' + esc((state.edits[editKey(state.level, state.role, st.id, state.selected.field)] || {}).note || '') + '</textarea>' +
+      '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">' +
+      '<button class="primary" id="btnApplyEdit">Внести правку</button>' +
+      '<button id="btnClearEdit">Убрать правку ячейки</button></div>';
+
+    el.querySelectorAll('select[data-right]').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        var patch = {};
+        patch[sel.dataset.right] = sel.value;
+        applyEdit(patch);
+      });
+    });
+    document.getElementById('btnApplyEdit').addEventListener('click', function () { applyEdit({}); });
+    document.getElementById('btnClearEdit').addEventListener('click', function () {
+      delete state.edits[editKey(state.level, state.role, st.id, state.selected.field)];
+      saveEdits(); renderAll();
+    });
+  }
+
+  function applyEdit(patch) {
+    var st = curStatus();
+    var ek = editKey(state.level, state.role, st.id, state.selected.field);
+    var cell = computeCell(state.level, state.role, st.id, state.selected.field);
+    var noteEl = document.getElementById('editNote');
+    state.edits[ek] = {
+      c: cell.c, r: cell.r, u: cell.u, d: cell.d,
+      constraints: cell.constraints,
+      note: noteEl ? noteEl.value : (cell.note || '')
+    };
+    Object.keys(patch).forEach(function (k) { state.edits[ek][k] = patch[k]; });
+    saveEdits(); renderAll();
+  }
+
+  /* ── Вид: красные линии агентов ──────────────────────────────────────── */
+  function renderAgents() {
+    var html = '<div class="card warn"><b>Пятая ось матрицы.</b> У «Витавто» агентов не было. Здесь агент — полноценный исполнитель, ' +
+      'поэтому у него есть глобальные запреты, которые сильнее любой выданной роли: их невозможно снять правкой ячейки.</div>';
+
+    html += '<h2>Что агент не делает никогда</h2><table class="tbl"><thead><tr><th>Агент</th><th>Запрещено</th><th>Почему — цитата</th></tr></thead><tbody>';
+    var redLines = [
+      ['agent_claude', 'Публиковать (--send), одобрять (--approve), менять .env / license.key / config/, удалять медиа и журналы, отправлять личные данные наружу', 'publish_queue.py:605-610; updater.py:123-130; CLAUDE.md'],
+      ['agent_claude', 'Ставить статус approved в очереди', 'publish_queue.py:114-115 «Статус, который ставит ТОЛЬКО cmd_approve(), то есть человек своей командой»'],
+      ['agent_claude', 'Собирать контент инструментами vidIQ', 'CLAUDE.md «vidiq_* — ТОЛЬКО РАЗВЕДКА»'],
+      ['agent_claude', 'Просить владельца расшарить ссылку на его же файлы', 'CLAUDE.md «НИКОГДА не проси клиента расшаривать ссылки на его собственные файлы»'],
+      ['agent_render', 'Читать .env, license.key, data/RESTRICTED; удалять исходники; перезаписывать photos/, talking/, music/', 'updater.py:123-130 (зона _FORBIDDEN)'],
+      ['agent_publish', 'Создавать записи очереди; трогать pending и expired; работать без --send; публиковать без is_approved()', 'publish_queue.py:673-679; publish_queue.py:753; publish_queue.py:136-145'],
+      ['agent_intake', 'Удалять и переименовывать исходники на Диске; переписывать индекс задним числом', 'modules/intake/pull.py; media_watch.py:99-152'],
+      ['agent_analytics', 'Писать в content_plan/; менять статусы публикаций', 'modules/analytics/published.py'],
+      ['agent_backup', 'Отправлять .env, license.key, медиа, out_*, .state/; публичный репозиторий; отправку при найденном секрете', 'github_backup.py:162-200; github_backup.py:744'],
+      ['agent_gate', 'Разрешать что-либо; отключаться на клиентской сборке', 'checks.py:281; activation_gate.py:31-53']
+    ];
+    redLines.forEach(function (row) {
+      html += '<tr><td class="rowhead">' + esc(ROLES_BY_ID[row[0]].title) + '</td><td>' + esc(row[1]) + '</td><td class="cite">' + esc(row[2]) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+
+    html += '<h2>Аксиомы, на которых стоит матрица</h2><table class="tbl"><thead><tr><th>#</th><th>Правило</th><th>Источник</th></tr></thead><tbody>';
+    KZ.axioms.forEach(function (a) {
+      html += '<tr><td class="cite">' + esc(a.id) + '</td><td>' + esc(a.text) + '</td><td class="cite">' + esc(a.src) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+
+    html += '<h2>Технические допуски: ролью не выдаются</h2>' +
+      '<div class="card"><p style="margin-top:0">Активация, лицензия и <code>.env</code> — не роль. Их нельзя «выдать правами»: ' +
+      'только переустановкой, активацией или решением владельца.</p>' +
+      '<ul><li><b>activation_gate.allow()</b> — гейт активации перед публикацией и рендером: <span class="mono">activation_gate.py:31-53</span>. ' +
+      'Гейт недоступен — операция разрешается с предупреждением (осознанное послабление аварийного случая).</li>' +
+      '<li><b>Лицензия</b> — <span class="mono">installer/activation.py</span>, файл <code>license.key</code> в <code>_DENY_NAMES</code>.</li>' +
+      '<li><b>Ключи площадок</b> — <code>.env</code>, зона <code>_FORBIDDEN</code>. Владелец — единственный, кому открыто чтение.</li></ul></div>';
+
+    document.getElementById('agentsView').innerHTML = html;
+  }
+
+  /* ── Вид: правила ────────────────────────────────────────────────────── */
+  function renderRules() {
+    var ids = Object.keys(KZ.rules).sort();
+    var html = '<div class="hint">Ограничения в матрице ссылаются сюда. У каждого правила — его источник в коде или в правилах завода.</div>';
+    html += '<table class="tbl"><thead><tr><th>ID</th><th>Правило</th><th>Что именно запрещено / требуется</th><th>Источник</th></tr></thead><tbody>';
+    ids.forEach(function (id) {
+      var r = KZ.rules[id];
+      html += '<tr><td class="cite">' + esc(id) + '</td><td class="rowhead">' + esc(r.title) + '</td><td>' + esc(r.text) + '</td><td class="cite">' + esc(r.src) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('rulesView').innerHTML = html;
+  }
+
+  /* ── Вид: gap-анализ ─────────────────────────────────────────────────── */
+  function renderGaps() {
+    var s = KZ.stats;
+    var html = '<div class="hint">Состояние каждой сущности по шагам работы: <b>есть</b> — работает в коде, ' +
+      '<b>частично</b> — есть половина, <b>нет</b> — разрыв. Отдельной строкой показан Delete: почти везде его нет.</div>';
+    html += '<div class="stats">' +
+      '<div class="stat"><b>' + s.gapYes + '</b><span>есть</span></div>' +
+      '<div class="stat"><b>' + s.gapPart + '</b><span>частично</span></div>' +
+      '<div class="stat"><b>' + s.gapNone + '</b><span>нет / разрыв</span></div></div>';
+    html += '<table class="tbl"><thead><tr><th>Модуль</th><th>Шаг</th><th>Состояние</th><th>Что именно</th><th>Источник</th></tr></thead><tbody>';
+    KZ.gaps.forEach(function (x) {
+      var cls = x.state === 'есть' ? 'ok' : (x.state === 'частично' ? 'part' : 'no');
+      html += '<tr><td class="rowhead">' + esc(x.module) + '</td><td>' + esc(x.aspect) + '</td>' +
+        '<td><span class="pill ' + cls + '">' + esc(x.state) + '</span></td><td>' + esc(x.note) + '</td>' +
+        '<td class="cite">' + esc(x.src) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '<h2>Что из этого следует</h2><div class="card"><ol>' +
+      '<li><b>Удаление — самое слабое место матрицы.</b> Из 25 разрывов 14 — «нет», и половина из них про Delete и retention. ' +
+      'Это не поломка, а осознанная поза кода: материалы не удаляют, а архивируют.</li>' +
+      '<li><b>Право Delete нельзя выдать ни одной роли, включая владельца</b> — на .env, license.key, config/, .state/, photos/, talking/, music/, out_*: ' +
+      'это уже запрещено <span class="mono">updater._FORBIDDEN</span>. Матрица обязана это повторять, а не «разрешать владельцу всё».</li>' +
+      '<li><b>Предохранитель публикации — сильнее любой роли.</b> Ни один агент не получает Create/Update в очереди так, чтобы это позволило обойти is_approved().</li>' +
+      '<li><b>Ретенции нет.</b> Единственное исключение — одноразовый <code>.vk_pkce.json</code> после входа ВК. Остальное живёт вечно, потому что решать это — владельцу (вопрос 6 опросника).</li>' +
+      '<li><b>Апрува на новый канал нет.</b> Подключение площадки в коде не требует подтверждения — это единственная «дырка» в протоколе (вопрос 7).</li>' +
+      '</ol></div>';
+    document.getElementById('gapsView').innerHTML = html;
+  }
+
+  /* ── Вид: роли ───────────────────────────────────────────────────────── */
+  function renderRoles() {
+    var html = '<div class="hint">Роли людей и роли агентов. У агента есть <b>actor_type</b>, и это меняет не набор действий, а само право решать.</div>';
+    html += '<table class="tbl"><thead><tr><th>Роль</th><th>Тип</th><th>Что делает</th><th>Модулей с правами</th><th>Источник</th></tr></thead><tbody>';
+    KZ.roles.forEach(function (r) {
+      var withRights = KZ.modules.filter(function (m) {
+        var cell = baseGrant(r.id, m.id);
+        return ['c', 'r', 'u', 'd'].some(function (k) { return cell[k] && cell[k] !== 'deny'; });
+      });
+      html += '<tr><td class="rowhead">' + esc(r.title) + '<br><span class="mono" style="color:var(--muted)">' + esc(r.id) + '</span></td>' +
+        '<td><span class="badge ' + (r.type === 'agent' ? 'agent' : 'human') + '">' + esc(KZ.actorTypes[r.type].title) + '</span></td>' +
+        '<td>' + esc(r.what) + '</td>' +
+        '<td>' + withRights.length + ' — <span class="mono" style="font-size:10.5px">' + esc(withRights.map(function (m) { return m.title; }).join(', ')) + '</span></td>' +
+        '<td class="cite">' + esc(r.src) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('rolesView').innerHTML = html;
+  }
+
+  /* ── Экспорт / импорт ────────────────────────────────────────────────── */
+  function buildExport() {
+    var cells = [];
+    KZ.levels.forEach(function (lvl) {
+      KZ.roles.forEach(function (r) {
+        lvl.statuses.forEach(function (st) {
+          KZ.modules.forEach(function (m) {
+            if (m.axis.indexOf(lvl.id) === -1) return;
+            m.fields.forEach(function (f) {
+              var c = computeCell(lvl.id, r.id, st.id, f.id);
+              cells.push({
+                level: lvl.id, role: r.id, actor_type: r.type, status: st.id,
+                module: m.id, field: f.id,
+                c: c.c, r: c.r, u: c.u, d: c.d,
+                constraints: c.constraints, note: c.note,
+                src: c.src, edited: !!c.edited, assumption: !!c.isAssumption
+              });
+            });
+          });
+        });
+      });
+    });
+
+    var entities = KZ.modules.map(function (m) {
+      var crud = {};
+      KZ.roles.forEach(function (r) {
+        var g = baseGrant(r.id, m.id);
+        crud[r.id] = { actor_type: r.type, c: g.c, r: g.r, u: g.u, d: g.d, constraints: g.constraints, src: g.src, note: g.note };
+      });
+      return { id: m.id, title: m.title, axis: m.axis, files: m.files, note: m.note, fields: m.fields, crud: crud };
+    });
+
+    return {
+      schema: KZ.schema,
+      project: KZ.project,
+      version: KZ.version,
+      exported_at: new Date().toISOString(),
+      statuses: {
+        unit: LEVELS_BY_ID.unit.statuses.map(function (s) { return s.id; }),
+        queue: LEVELS_BY_ID.queue.statuses.map(function (s) { return s.id; })
+      },
+      roles: KZ.roles.map(function (r) { return { id: r.id, actor_type: r.type, title: r.title, what: r.what, src: r.src }; }),
+      entities: entities,
+      rights: KZ.rights,
+      rules: KZ.rules,
+      gaps: KZ.gaps,
+      open_questions: KZ.openQuestions,
+      owner_edits: state.edits,
+      cells: cells
+    };
+  }
+
+  function download(name, text) {
+    var blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+  }
+
+  function importJson(text) {
+    var data;
+    try { data = JSON.parse(text); } catch (e) { alert('Это не JSON: ' + e.message); return; }
+    if (data.schema && data.schema.indexOf('kz-access-matrix') !== 0) {
+      alert('Схема файла: ' + data.schema + '. Ожидается kz-access-matrix/1.');
+      return;
+    }
+    if (data.owner_edits && typeof data.owner_edits === 'object') {
+      state.edits = data.owner_edits; saveEdits(); renderAll();
+      alert('Правки владельца загружены: ' + Object.keys(state.edits).length + ' ячеек.');
+      return;
+    }
+    if (Array.isArray(data.cells)) {
+      var n = 0;
+      data.cells.forEach(function (c) {
+        if (!c || !c.field || !c.status || !c.role || !c.level) return;
+        state.edits[editKey(c.level, c.role, c.status, c.field)] = {
+          c: c.c, r: c.r, u: c.u, d: c.d, constraints: c.constraints || [], note: c.note || ''
+        };
+        n++;
+      });
+      saveEdits(); renderAll();
+      alert('Загружено ячеек: ' + n + '. Каждая стала правкой владельца.');
+      return;
+    }
+    alert('В файле нет ни owner_edits, ни cells — импортировать нечего.');
+  }
+
+  /* ── Сводная отрисовка ───────────────────────────────────────────────── */
+  function renderAll() {
+    document.getElementById('rootPath').textContent = KZ.root;
+    document.getElementById('statusLine').textContent =
+      LEVELS_BY_ID[state.level].title + ' · статус «' + curStatus().title + '» · роль «' + ROLES_BY_ID[state.role].title + '»';
+    renderLevelSeg(); renderRoleTabs(); renderStats();
+    renderMatrix(); renderSide();
+    ['matrix', 'agents', 'rules', 'gaps', 'roles'].forEach(function (v) {
+      var el = document.getElementById(v + 'View');
+      if (el) el.hidden = (state.view !== v);
+    });
+    document.querySelectorAll('#viewSeg button').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.view === state.view);
+    });
+    document.getElementById('btnToggleEmpty').classList.toggle('active', state.showDeny);
+  }
+
+  /* ── События ─────────────────────────────────────────────────────────── */
+  document.getElementById('roleTabs').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-role]'); if (!b) return;
+    state.role = b.dataset.role; state.selected = null; renderAll();
+  });
+  document.getElementById('levelSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-level]'); if (!b) return;
+    state.level = b.dataset.level; state.selected = null; renderAll();
+  });
+  document.getElementById('viewSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-view]'); if (!b) return;
+    state.view = b.dataset.view; renderAll();
+  });
+  document.getElementById('matrixTable').addEventListener('click', function (e) {
+    var td = e.target.closest('td.matrix-cell'); if (!td) return;
+    state.selected = { field: td.dataset.field, status: parseInt(td.dataset.statusIdx, 10) };
+    state.statusIdx[state.level] = state.selected.status;
+    renderAll();
+  });
+  document.getElementById('searchInput').addEventListener('input', function (e) {
+    state.search = e.target.value.trim(); renderMatrix();
+  });
+  document.getElementById('btnToggleEmpty').addEventListener('click', function () {
+    state.showDeny = !state.showDeny; renderAll();
+  });
+  document.getElementById('btnExport').addEventListener('click', function () {
+    download('kz-access-matrix-' + KZ.version + '.json', JSON.stringify(buildExport(), null, 2));
+  });
+  document.getElementById('btnImport').addEventListener('click', function () {
+    var inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.json,application/json';
+    inp.addEventListener('change', function () {
+      var f = inp.files[0]; if (!f) return;
+      var r = new FileReader();
+      r.onload = function () { importJson(String(r.result)); };
+      r.readAsText(f, 'utf-8');
+    });
+    inp.click();
+  });
+  document.getElementById('btnReset').addEventListener('click', function () {
+    if (!confirm('Убрать все правки владельца? Матрица вернётся к состояниям из кода.')) return;
+    state.edits = {}; saveEdits(); state.selected = null; renderAll();
+  });
+
+  /* ── Старт ───────────────────────────────────────────────────────────── */
+  loadEdits();
+  renderAgents(); renderRules(); renderGaps(); renderRoles();
+  renderAll();
+  saveEdits();
+}());
+</script>
+</body>
+</html>

@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Контент-завод — интерактивный процесс: роли, статусы, покрытие кода</title>
+<link rel="stylesheet" href="kz.css">
+</head>
+<body>
+
+<header class="app">
+  <h1>Контент-завод — интерактивный процесс</h1>
+  <div class="sub">
+    Дорожки = роли. Узлы = шаги. Цвет узла = <b>есть в коде / частично / нет</b>.
+    Плеер ведёт по сценарию и гасит всё, что в этот момент не происходит.
+    Источник: <code>publish_queue.py</code>, <code>checks.py</code>, <code>modules/content_plan/*</code>,
+    <code>github_backup.py</code>, <code>updater.py</code>, <code>installer/</code>, <code>ПРАВИЛА_ЗАВОДА.md</code>, <code>CLAUDE.md</code>.
+  </div>
+  <div class="toolbar">
+    <div class="seg" id="viewSeg">
+      <button data-view="process" class="active">Процесс</button>
+      <button data-view="gates">Предохранители кратко</button>
+    </div>
+    <label class="inline process-chrome">Сценарий
+      <select id="scenarioSelect"></select>
+    </label>
+    <button id="btnPrev" class="process-chrome" title="Предыдущий шаг">◀</button>
+    <button id="btnPlay" class="primary process-chrome">▶ Плей</button>
+    <button id="btnNext" class="process-chrome" title="Следующий шаг">▶</button>
+    <button id="btnStop" class="process-chrome">Сброс плеера</button>
+    <div class="grow"></div>
+    <button id="btnCoverage" class="toggle active process-chrome" title="Подсветка покрытия кода">Покрытие кода</button>
+    <button id="btnGapsOnly" class="toggle process-chrome" title="Показать только разрывы">Только разрывы</button>
+    <select id="laneFilter" class="process-chrome" title="Фильтр роли"><option value="">Все роли</option></select>
+    <a class="btn process-chrome" href="index.html">← Матрица прав</a>
+    <a class="btn process-chrome" href="approve.html">Протокол апрувов</a>
+    <a class="btn process-chrome" href="protocol-map.html">Карта протокола</a>
+  </div>
+</header>
+
+<div class="legend">
+  <span><span class="sw allow"></span>есть в коде</span>
+  <span><span class="sw conditional"></span>частично</span>
+  <span><span class="sw deny"></span>нет / разрыв</span>
+  <span class="badge">клик по узлу — подробности, источник и переходы</span>
+  <span class="badge" id="statusLine"></span>
+</div>
+
+<div class="layout">
+  <div class="main">
+
+    <div class="player" id="playerBar">
+      <div class="scenario-head">
+        <button type="button" class="scenario-toggle" id="btnScenariosToggle" aria-expanded="false" title="Развернуть / свернуть список сценариев">
+          <span class="chev" aria-hidden="true">▶</span>
+          <strong>Сценарии плеера — <span id="scenarioCount">0</span></strong>
+        </button>
+        <span class="badge" id="scenariosCollapsedHint">свёрнуто · кликните заголовок</span>
+      </div>
+      <div class="scenario-body" id="scenarioBody" hidden>
+        <div class="scenario-filters" id="scenarioFilters"></div>
+        <div class="scenario-sections" id="scenarioGrid"></div>
+      </div>
+      <div class="player-top">
+        <div class="step-meta">
+          <div class="step-title" id="playerTitle">—</div>
+          <div class="step-note" id="playerNote">Нажмите «Плей» или ◀/▶.</div>
+          <div class="progress"><i id="playerProgress" style="width:0%"></i></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats" id="statsRow"></div>
+
+    <div class="view-panel" id="processView">
+      <div class="hint">
+        Дорожки = роли со матрицы прав. Узлы с пунктирной рамкой — развилки.
+        Узлы с красной рамкой — то, что роли запрещено делать: в плеере они подсвечиваются наравне с шагами,
+        потому что «чего нельзя» — такая же часть процесса.
+      </div>
+      <div class="lanes" id="lanes"></div>
+    </div>
+
+    <div class="view-panel" id="gatesView" hidden></div>
+  </div>
+
+  <aside class="side" id="sidePanel">
+    <div class="empty" id="sideEmpty">Кликните узел на схеме или запустите плеер — здесь появятся подробности шага, покрытие кода, источник и переходы.</div>
+    <div id="sideContent" hidden></div>
+  </aside>
+</div>
+
+<footer class="app" style="padding:10px 16px;color:var(--muted);font-size:11.5px;border-top:1px solid var(--border);background:var(--panel);position:static;">
+  Покрытие — по коду репозитория на 11.11.2026. Узлы «нет / разрыв» — это места, где матрица прав честно показывает дырку:
+  удаление материалов, апрув нового канала, retention. Их не прячут, их разбирают с владельцем.
+</footer>
+
+<script src="kz.data.js"></script>
+<script src="kz.flow.js"></script>
+<script>
+(function () {
+  'use strict';
+  var KZ = window.KZ, F = window.KZFLOW;
+  if (!KZ || !F) { document.body.innerHTML = '<p style="padding:20px">Не загрузились файлы данных (kz.data.js, kz.flow.js)</p>'; return; }
+
+  var LANES_BY_ID = {}, NODES_BY_ID = {};
+  F.lanes.forEach(function (l) { LANES_BY_ID[l.id] = l; });
+  F.nodes.forEach(function (n) { NODES_BY_ID[n.id] = n; });
+
+  var state = {
+    scenario: F.scenarios[0].id,
+    step: -1,
+    playing: false,
+    timer: null,
+    node: null,
+    view: 'process',
+    coverage: true,
+    gapsOnly: false,
+    lane: '',
+    group: ''
+  };
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function cur() { return F.scenarios.filter(function (s) { return s.id === state.scenario; })[0] || F.scenarios[0]; }
+  function stepNodes(st) { return st.nodes.map(function (id) { return NODES_BY_ID[id]; }).filter(Boolean); }
+  function playPathIds() {
+    var out = [];
+    cur().steps.forEach(function (st) { st.nodes.forEach(function (id) { if (out.indexOf(id) === -1) out.push(id); }); });
+    return out;
+  }
+  function groupTitle(id) { var g = F.groups.filter(function (x) { return x.id === id; })[0]; return g ? g.title : id; }
+  function groupLetter(id) { var g = F.groups.filter(function (x) { return x.id === id; })[0]; return g ? g.title.replace(/^([A-Z])\.\s*/, '$1 · ') : id; }
+  function covCls(c) { return c === 'ok' ? 'ok' : (c === 'part' ? 'part' : 'no'); }
+
+  /* ── Сценарии ────────────────────────────────────────────────────────── */
+  function renderSelectors() {
+    var sel = document.getElementById('scenarioSelect');
+    sel.innerHTML = F.groups.map(function (g) {
+      var list = F.scenarios.filter(function (s) { return s.group === g.id; });
+      if (!list.length) return '';
+      return '<optgroup label="' + esc(g.title) + '">' + list.map(function (s) {
+        return '<option value="' + s.id + '"' + (s.id === state.scenario ? ' selected' : '') + '>' +
+          esc(s.title + ' (' + s.steps.length + ' ш.)') + '</option>';
+      }).join('') + '</optgroup>';
+    }).join('');
+    document.getElementById('scenarioCount').textContent = F.scenarios.length;
+
+    var lf = document.getElementById('laneFilter');
+    lf.innerHTML = '<option value="">Все роли</option>' + F.lanes.map(function (l) {
+      return '<option value="' + l.id + '"' + (state.lane === l.id ? ' selected' : '') + '>' + esc(l.title) + '</option>';
+    }).join('');
+  }
+
+  function renderScenarioPickers() {
+    document.getElementById('scenarioFilters').innerHTML =
+      '<button data-group="" class="' + (state.group === '' ? 'active' : '') + '">Все (' + F.scenarios.length + ')</button>' +
+      F.groups.map(function (g) {
+        var n = F.scenarios.filter(function (s) { return s.group === g.id; }).length;
+        return '<button data-group="' + g.id + '" class="' + (state.group === g.id ? 'active' : '') + '" title="' + esc(g.title) + '">' +
+          esc(g.title) + ' (' + n + ')</button>';
+      }).join('');
+
+    document.getElementById('scenarioGrid').innerHTML = F.groups.map(function (g) {
+      if (state.group && state.group !== g.id) return '';
+      var list = F.scenarios.filter(function (s) { return s.group === g.id; });
+      if (!list.length) return '';
+      return '<div class="scenario-section"><h4>' + esc(g.title) + ' · ' + list.length + '</h4><div class="scenario-grid">' +
+        list.map(function (s) {
+          return '<button type="button" data-scenario="' + s.id + '" class="' + (s.id === state.scenario ? 'active' : '') + '">' +
+            '<span class="sid">' + esc(s.group + ' · ' + s.steps.length + ' шагов') + '</span>' + esc(s.title) + '</button>';
+        }).join('') + '</div></div>';
+    }).join('');
+  }
+
+  /* ── Матрица-дорожки ─────────────────────────────────────────────────── */
+  function nodeVisible(n) {
+    if (state.lane && n.lane !== state.lane) return false;
+    if (state.gapsOnly && n.cov !== 'no') return false;
+    return true;
+  }
+
+  function renderLanes() {
+    var pathIds = playPathIds();
+    var activeIds = state.step >= 0 ? cur().steps[state.step].nodes : [];
+    var html = '';
+    F.lanes.forEach(function (lane) {
+      var nodes = F.nodes.filter(function (n) { return n.lane === lane.id; });
+      if (state.lane && lane.id !== state.lane) return;
+      if (!nodes.length) return;
+      var laneDim = state.step >= 0 && !activeIds.some(function (id) { return NODES_BY_ID[id].lane === lane.id; });
+      html += '<div class="lane ' + lane.cls + (laneDim ? ' dim' : '') + '">' +
+        '<div class="lane-label">' + esc(lane.title) + '</div><div class="lane-nodes">';
+      var shown = 0;
+      nodes.forEach(function (n) {
+        if (!nodeVisible(n)) return;
+        shown++;
+        var cls = 'node cov-' + covCls(n.cov);
+        if (n.kind === 'decision') cls += ' decision';
+        if (n.cov === 'no') cls += ' lock';
+        if (state.node === n.id) cls += ' selected';
+        if (activeIds.indexOf(n.id) !== -1) cls += ' play-active';
+        else if (state.step >= 0 && !laneDim) cls += ' dim';
+        html += '<button type="button" class="' + cls + '" data-id="' + n.id + '">' +
+          '<span class="nid">' + esc(n.id) + '</span>' +
+          '<span class="ntitle">' + esc(n.title) + '</span>' +
+          '<span class="nmeta">' + (state.coverage ? '<span class="pill cov ' + covCls(n.cov) + '">' + esc(F.cov[n.cov]) + '</span>' : '') +
+          (n.kind === 'gate' ? '<span class="pill lock">гейт</span>' : '') +
+          (n.kind === 'decision' ? '<span class="pill lock">развилка</span>' : '') + '</span></button>';
+      });
+      if (!shown) html += '<div class="hint" style="align-self:center">в этом фильтре у роли нет узлов</div>';
+      html += '</div></div>';
+    });
+    document.getElementById('lanes').innerHTML = html;
+  }
+
+  /* ── Подробности узла ────────────────────────────────────────────────── */
+  function renderSide() {
+    var el = document.getElementById('sideContent'), empty = document.getElementById('sideEmpty');
+    if (!state.node) { el.hidden = true; empty.hidden = false; return; }
+    empty.hidden = true; el.hidden = false;
+    var n = NODES_BY_ID[state.node];
+    var lane = LANES_BY_ID[n.lane];
+    var next = (n.next || []).map(function (x) {
+      var t = NODES_BY_ID[x.to];
+      return '<div class="map-card ' + (x.dashed ? 'deny' : '') + '"><span class="who">' + (x.dashed ? '⋯ ' : '→ ') + esc(x.label) + '</span>' +
+        '<div class="what">' + esc(t ? t.title : x.to) + ' <span class="mono">(' + esc(x.to) + ')</span></div></div>';
+    }).join('') || '<div class="hint">Конечный узел: дальше переходов нет.</div>';
+
+    var inPath = F.scenarios.filter(function (s) { return s.steps.some(function (st) { return st.nodes.indexOf(n.id) !== -1; }); });
+
+    el.innerHTML =
+      '<h3>' + esc(n.id) + ' · ' + esc(n.title) + '</h3>' +
+      '<div style="margin:6px 0"><span class="badge ' + (lane.cls === 'agent' ? 'agent' : lane.cls === 'human' ? 'human' : '') + '">' + esc(lane.title) + '</span> ' +
+      '<span class="pill ' + covCls(n.cov) + '">' + esc(F.cov[n.cov]) + '</span>' +
+      (n.kind === 'gate' ? ' <span class="pill lock">гейт</span>' : '') +
+      (n.kind === 'decision' ? ' <span class="pill lock">развилка</span>' : '') + '</div>' +
+      '<p>' + esc(n.full) + '</p>' +
+      '<div class="quote">' + esc(n.src) + '</div>' +
+      '<h4>Переходы</h4>' + next +
+      '<h4>В каких сценариях</h4>' +
+      '<div class="hint">' + (inPath.length ? inPath.map(function (s) {
+        return '<a href="#" data-goto="' + s.id + '">' + esc(s.title) + '</a>';
+      }).join(' · ') : 'Ни в одном — это ветка, до которой сценарии пока не доходят.') + '</div>' +
+      '<h4>Связь с матрицей</h4>' +
+      '<div class="hint">Права на этом шаге смотрите в <a href="index.html">матрице</a>: выберите роль «' + esc(lane.title) + '»' +
+      (lane.cls === 'agent' ? ' и откройте вкладку «Красные линии агентов»' : '') + '.</div>';
+
+    el.querySelectorAll('a[data-goto]').forEach(function (a) {
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        pickScenario(a.dataset.goto);
+      });
+    });
+  }
+
+  /* ── Плеер ───────────────────────────────────────────────────────────── */
+  function updatePlayer() {
+    var sc = cur();
+    document.getElementById('playerTitle').textContent = groupTitle(sc.group) + ' · ' + sc.title;
+    if (state.step < 0) {
+      document.getElementById('playerNote').textContent = sc.note + ' Шагов: ' + sc.steps.length + '.';
+      document.getElementById('playerProgress').style.width = '0%';
+      return;
+    }
+    var st = sc.steps[state.step];
+    document.getElementById('playerNote').textContent =
+      'Шаг ' + (state.step + 1) + ' из ' + sc.steps.length + ': ' + st.note;
+    document.getElementById('playerProgress').style.width = ((state.step + 1) / sc.steps.length * 100) + '%';
+  }
+
+  function goStep(i) {
+    var sc = cur();
+    if (i >= sc.steps.length) { stopPlay(false); return; }
+    state.step = Math.max(-1, i);
+    if (state.step >= 0) state.node = sc.steps[state.step].nodes[0];
+    renderAll();
+  }
+  function stopPlay(reset) {
+    state.playing = false;
+    if (state.timer) { clearInterval(state.timer); state.timer = null; }
+    document.getElementById('btnPlay').textContent = '▶ Плей';
+    if (reset) { state.step = -1; state.node = null; }
+    renderAll();
+  }
+  function togglePlay() {
+    if (state.playing) { stopPlay(false); return; }
+    state.playing = true;
+    document.getElementById('btnPlay').textContent = '❚❚ Пауза';
+    if (state.step < 0) goStep(0);
+    state.timer = setInterval(function () { goStep(state.step + 1); }, 2200);
+  }
+
+  /* ── Предохранители кратко ───────────────────────────────────────────── */
+  function renderGates() {
+    var hard = F.approvals.filter(function (a) { return a.gate === 'жёсткий'; });
+    var gap = F.approvals.filter(function (a) { return a.type === 'gap'; });
+    var html = '<div class="hint">Полный разбор — в <a href="approve.html">протоколе апрувов</a>. Здесь только то, что останавливает завод.</div>';
+    html += '<table class="tbl"><thead><tr><th>#</th><th>Что останавливает</th><th>Кто решает</th><th>Чем</th><th>Источник</th></tr></thead><tbody>';
+    hard.forEach(function (a) {
+      html += '<tr><td class="cite">' + esc(a.id) + '</td><td class="rowhead">' + esc(a.title) + '</td><td>' + esc(a.who) + '</td>' +
+        '<td class="cite">' + esc(a.cmd) + '</td><td class="cite">' + esc(a.src) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '<h2>Чего в протоколе нет</h2><table class="tbl"><thead><tr><th>#</th><th>Пробел</th><th>Почему это важно</th></tr></thead><tbody>';
+    gap.forEach(function (a) {
+      html += '<tr><td class="cite">' + esc(a.id) + '</td><td class="rowhead">' + esc(a.title) + '</td><td>' + esc(a.blocks) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('gatesView').innerHTML = html;
+  }
+
+  /* ── Сводка и общая отрисовка ────────────────────────────────────────── */
+  function renderStats() {
+    var s = F.stats;
+    document.getElementById('statsRow').innerHTML =
+      '<div class="stat"><b>' + s.nodes + '</b><span>узлов процесса</span></div>' +
+      '<div class="stat"><b>' + s.covOk + '</b><span>есть в коде</span></div>' +
+      '<div class="stat"><b>' + s.covPart + '</b><span>частично</span></div>' +
+      '<div class="stat"><b>' + s.covNo + '</b><span>разрывов</span></div>' +
+      '<div class="stat"><b>' + s.scenarios + '</b><span>сценариев</span></div>' +
+      '<div class="stat"><b>' + s.approvals + '</b><span>точек апрува</span></div>' +
+      '<div class="stat"><b>' + s.approvalsGap + '</b><span>пробелов протокола</span></div>';
+  }
+
+  function renderAll() {
+    var sc = cur();
+    document.getElementById('statusLine').textContent = groupTitle(sc.group) + ' · ' + sc.title +
+      (state.step >= 0 ? ' · шаг ' + (state.step + 1) + '/' + sc.steps.length : ' · плеер остановлен');
+    document.getElementById('btnCoverage').classList.toggle('active', state.coverage);
+    document.getElementById('btnGapsOnly').classList.toggle('active', state.gapsOnly);
+    document.body.classList.toggle('coverage-off', !state.coverage);
+    document.getElementById('processView').hidden = state.view !== 'process';
+    document.getElementById('gatesView').hidden = state.view !== 'gates';
+    document.querySelectorAll('#viewSeg button').forEach(function (b) { b.classList.toggle('active', b.dataset.view === state.view); });
+    renderSelectors(); renderScenarioPickers(); renderStats(); renderLanes(); renderSide(); updatePlayer();
+    var q = [];
+    q.push('scenario=' + encodeURIComponent(state.scenario));
+    if (state.step >= 0) q.push('step=' + state.step);
+    if (state.node) q.push('node=' + encodeURIComponent(state.node));
+    if (state.lane) q.push('lane=' + encodeURIComponent(state.lane));
+    if (state.view !== 'process') q.push('view=' + encodeURIComponent(state.view));
+    try { history.replaceState(null, '', location.pathname + '?' + q.join('&')); } catch (e) {}
+  }
+
+  function pickScenario(id) {
+    state.scenario = id; state.step = -1; state.node = null;
+    stopPlay(false);
+    document.getElementById('scenarioBody').hidden = true;
+    document.getElementById('btnScenariosToggle').setAttribute('aria-expanded', 'false');
+    renderAll();
+  }
+
+  /* ── События ─────────────────────────────────────────────────────────── */
+  document.getElementById('lanes').addEventListener('click', function (e) {
+    var b = e.target.closest('button.node'); if (!b) return;
+    state.node = b.dataset.id; renderAll();
+  });
+  document.getElementById('scenarioSelect').addEventListener('change', function (e) { pickScenario(e.target.value); });
+  document.getElementById('scenarioFilters').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-group]'); if (!b) return;
+    state.group = b.dataset.group; renderAll();
+  });
+  document.getElementById('scenarioGrid').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-scenario]'); if (!b) return;
+    pickScenario(b.dataset.scenario);
+  });
+  document.getElementById('btnScenariosToggle').addEventListener('click', function () {
+    var body = document.getElementById('scenarioBody');
+    var open = body.hidden;
+    body.hidden = !open;
+    this.setAttribute('aria-expanded', String(open));
+    document.getElementById('scenariosCollapsedHint').hidden = open;
+  });
+  document.getElementById('btnPrev').addEventListener('click', function () { goStep(state.step - 1); });
+  document.getElementById('btnNext').addEventListener('click', function () { goStep(state.step + 1); });
+  document.getElementById('btnPlay').addEventListener('click', togglePlay);
+  document.getElementById('btnStop').addEventListener('click', function () { stopPlay(true); });
+  document.getElementById('btnCoverage').addEventListener('click', function () { state.coverage = !state.coverage; renderAll(); });
+  document.getElementById('btnGapsOnly').addEventListener('click', function () { state.gapsOnly = !state.gapsOnly; renderAll(); });
+  document.getElementById('laneFilter').addEventListener('change', function (e) { state.lane = e.target.value; renderAll(); });
+  document.getElementById('viewSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-view]'); if (!b) return;
+    state.view = b.dataset.view; renderAll();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+    if (e.key === 'ArrowLeft') goStep(state.step - 1);
+    if (e.key === 'ArrowRight') goStep(state.step + 1);
+    if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+  });
+
+  /* ── Старт: параметры из адреса ──────────────────────────────────────── */
+  (function boot() {
+    var q = new URLSearchParams(location.search);
+    var sc = q.get('scenario');
+    if (sc && F.scenarios.some(function (s) { return s.id === sc; })) state.scenario = sc;
+    var node = q.get('node');
+    if (node && NODES_BY_ID[node]) state.node = node;
+    var step = parseInt(q.get('step'), 10);
+    if (!isNaN(step)) state.step = Math.min(step, cur().steps.length - 1);
+    var lane = q.get('lane');
+    if (lane && LANES_BY_ID[lane]) state.lane = lane;
+    var view = q.get('view');
+    if (view === 'gates' || view === 'process') state.view = view;
+  }());
+
+  renderGates();
+  renderAll();
+}());
+</script>
+</body>
+</html>
