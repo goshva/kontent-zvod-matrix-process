@@ -89,4 +89,34 @@ const probe = {};
 
 console.log(JSON.stringify(brief), action ? ('[' + action + ' ' + arg + ' -> ' + fired + ']') : '');
 console.log('PROBE ' + JSON.stringify(probe));
+
+/* Разметка таблиц: на телефоне строки становятся карточками, а подписи берутся
+   из шапки. Если в строке не столько ячеек, сколько столбцов, подписи съедут —
+   поэтому сверяем число <th> и <td> (с учётом colspan) прямо здесь. */
+let tables = 0, mismatch = [];
+Object.keys(out).forEach(key => {
+  const html = out[key];
+  if (typeof html !== 'string' || html.indexOf('table class="tbl"') === -1) return;
+  (html.match(/<table class="tbl"[\s\S]*?<\/table>/g) || []).forEach((tbl, i) => {
+    tables++;
+    const head = (tbl.match(/<thead>[\s\S]*?<\/thead>/) || [''])[0];
+    const ths = (head.match(/<th[\s>]/g) || []).length;
+    const body = (tbl.match(/<tbody>([\s\S]*?)<\/tbody>/) || ['', ''])[1];
+    (body.match(/<tr[\s\S]*?<\/tr>/g) || []).forEach((r, ri) => {
+      let total = 0;
+      const re = /<td([^>]*)>/g;
+      let m;
+      while ((m = re.exec(r))) {
+        const cs = /colspan="(\d+)"/.exec(m[1]);
+        total += cs ? parseInt(cs[1], 10) : 1;
+      }
+      if (ths && total !== ths) mismatch.push(key + ' · таблица ' + (i + 1) + ', строка ' + (ri + 1) + ': шапка ' + ths + ', ячеек ' + total);
+    });
+  });
+});
+console.log('ТАБЛИЦЫ: проверено ' + tables + ', несовпадений ' + mismatch.length +
+  (mismatch.length ? ' — подписи столбцов съедут!' : ' — подписи лягут верно'));
+mismatch.slice(0, 10).forEach(x => console.log('  ✗ ' + x));
+
 fs.writeFileSync(path.join(process.env.TEMP, 'kzdom3_' + file.replace(/\W/g, '_') + '_' + action + '_' + arg + '.json'), JSON.stringify(out));
+if (mismatch.length) process.exit(4);

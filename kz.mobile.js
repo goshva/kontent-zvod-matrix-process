@@ -128,30 +128,34 @@
     legendHome = null;
   }
 
-  /* ── 3. Широкие таблицы ──────────────────────────────────────────────── */
-  var WRAPPED = '__kzScrollWrapped';
-
-  function wrapTables() {
+  /* ── 3. Таблицы → карточки ───────────────────────────────────────────────
+     На узком экране таблица с восемью столбцами нечитаема: сжимать её нельзя,
+     а прокручивать вбок неудобно. Поэтому подписываем каждую ячейку именем её
+     столбца (data-th) — CSS превращает строку таблицы в карточку, а подпись
+     берёт из атрибута. Разметку страниц при этом не трогаем: тот же <table>,
+     чтобы на широком экране ничего не поменялось. */
+  function adaptTables() {
     if (!doc.querySelectorAll) return;
     var tables = doc.querySelectorAll('table.tbl');
     for (var i = 0; i < tables.length; i++) {
       var t = tables[i];
-      if (t[WRAPPED]) continue;
-      var parent = t.parentNode;
-      if (!parent || (parent.classList && parent.classList.contains('tbl-scroll'))) {
-        t[WRAPPED] = true;
-        continue;
+      var heads = t.querySelectorAll('thead th');
+      if (!heads || !heads.length) continue;   // узкая таблица без шапки остаётся таблицей
+      var titles = [];
+      for (var h = 0; h < heads.length; h++) {
+        titles.push(String(heads[h].textContent || '').replace(/\s+/g, ' ').trim());
       }
-      var wrap = doc.createElement('div');
-      wrap.className = 'tbl-scroll';
-      parent.insertBefore(wrap, t);
-      wrap.appendChild(t);
-      t[WRAPPED] = true;
-
-      var hint = doc.createElement('div');
-      hint.className = 'scroll-hint';
-      hint.textContent = 'Таблица шире экрана — прокрутите её вбок →';
-      wrap.parentNode.insertBefore(hint, wrap.nextSibling);
+      var rows = t.querySelectorAll('tbody tr');
+      for (var r = 0; r < rows.length; r++) {
+        var cells = rows[r].querySelectorAll('td');
+        for (var c = 0; c < cells.length; c++) {
+          var cell = cells[c];
+          if (!cell || !cell.setAttribute) continue;
+          if (cell.getAttribute && cell.getAttribute('data-th')) continue;   // уже подписана
+          cell.setAttribute('data-th', titles[c] || '');
+        }
+      }
+      if (t.classList && !t.classList.contains('tbl-cards')) t.classList.add('tbl-cards');
     }
   }
 
@@ -188,15 +192,15 @@
   onReady(function () {
     buildBurger();
     placeLegend(isMobile());
-    wrapTables();
+    adaptTables();
     // Страницы перерисовывают содержимое сами (смена вида, роли, статуса) —
-    // следим за этим и заворачиваем новые таблицы.
+    // следим за этим и подписываем ячейки новых таблиц.
     if (root.MutationObserver && doc.querySelector('.main')) {
       var pending = false;
       var mo = new root.MutationObserver(function () {
         if (pending) return;
         pending = true;
-        setTimeout(function () { pending = false; wrapTables(); }, 120);
+        setTimeout(function () { pending = false; adaptTables(); }, 120);
       });
       mo.observe(doc.querySelector('.main'), { childList: true, subtree: true });
     }
@@ -210,7 +214,7 @@
       if (rTimer) root.clearTimeout(rTimer);
       rTimer = root.setTimeout(function () {
         placeLegend(isMobile());
-        wrapTables();
+        adaptTables();
       }, 180);
     });
   }
@@ -220,7 +224,7 @@
     revealSide: revealSide,
     centerNode: centerNode,
     scrollTo: smoothTo,
-    wrapTables: wrapTables,
+    adaptTables: adaptTables,
     placeLegend: placeLegend,
     esc: esc
   };

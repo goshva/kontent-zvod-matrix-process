@@ -340,10 +340,8 @@ details.box li{margin-bottom:5px; line-height:1.5;}
 .nav-toggle[aria-expanded="true"] .burger i:nth-child(2){opacity:0;}
 .nav-toggle[aria-expanded="true"] .burger i:nth-child(3){transform:translateY(-5px) rotate(-45deg);}
 
-/* Таблицы, которые не влезают: своя горизонтальная прокрутка вместо обрезки */
-.tbl-scroll{overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:var(--radius);}
-.tbl-scroll > table.tbl{min-width:660px;}
-.scroll-hint{display:none;}
+/* Таблицы .tbl на узком экране становятся карточками — см. блок ниже.
+   Подписи столбцов приходят из data-th, их ставит kz.mobile.js. */
 
 @media (max-width: 900px){
   body{font-size:13.5px;}
@@ -484,13 +482,37 @@ details.box li{margin-bottom:5px; line-height:1.5;}
   .modal-overlay{padding:10px; align-items:flex-start;}
   .modal{max-height:88vh; padding:14px;}
 
-  .tbl-scroll{position:relative;}
-  .tbl-scroll > table.tbl{min-width:680px; font-size:11.5px;}
-  .scroll-hint{
-    display:block; color:var(--muted); font-size:11px; margin:4px 0 8px;
+  /* Таблицы .tbl — КАРТОЧКАМИ, как матрица. Восемь столбцов в узкий экран не
+     влезают: строка таблицы становится карточкой, а подпись каждого значения
+     приходит из data-th (его проставляет kz.mobile.js из шапки таблицы). */
+  table.tbl{display:block; width:100%; border:none; background:transparent; border-radius:0; font-size:12px;}
+  table.tbl thead{display:none;}
+  table.tbl tbody,
+  table.tbl tr{display:block;}
+  table.tbl tbody tr{
+    display:block; background:var(--panel); border:1px solid var(--border);
+    border-radius:10px; padding:9px 11px; margin:0 0 10px;
   }
+  table.tbl tbody tr:hover td{background:transparent;}
+  table.tbl td{
+    display:grid; grid-template-columns:minmax(64px, 38%) minmax(0, 1fr); gap:8px;
+    padding:6px 0; border:none; border-top:1px solid #f1f3f7; vertical-align:top;
+    white-space:normal; overflow-wrap:anywhere;
+  }
+  table.tbl td:first-child{border-top:none; padding-top:2px; grid-template-columns:1fr; gap:2px;}
+  table.tbl td::before{
+    content: attr(data-th); font-size:10px; text-transform:uppercase; letter-spacing:.03em;
+    color:var(--muted); line-height:1.3;
+  }
+  table.tbl td:first-child::before{margin-top:0;}
+  table.tbl td:first-child > b,
+  table.tbl td:first-child.rowhead{font-size:12.5px;}
+  /* Ячейка без подписи (в таблице не было шапки) — занимает всю ширину */
+  table.tbl td[data-th=""]{grid-template-columns:1fr;}
+  table.tbl td[data-th=""]::before{display:none;}
+  table.tbl td.cite{font-size:11px;}
+  table.tbl tbody tr:last-child td{border-bottom:none;}
   .quote{font-size:11px;}
-  table.tbl th,table.tbl td{padding:7px 8px;}
 }
 
 @media (max-width: 560px){
@@ -503,6 +525,9 @@ details.box li{margin-bottom:5px; line-height:1.5;}
   /* В карточном режиме столбцу-заголовку ширину не навязываем */
   table.matrix td.col-head{min-width:0; max-width:none; font-size:12px;}
   table.matrix td.matrix-cell::before{font-size:10.5px;}
+  /* Карточки таблиц на самом узком экране: подпись колонки — узкая колонка */
+  table.tbl td{grid-template-columns:minmax(52px, 32%) minmax(0, 1fr);}
+  table.tbl td:first-child{grid-template-columns:1fr;}
 }
 
 /* Наведение и фокус — с тач-экрана их нет, поэтому активный элемент подсвечен смещением */
@@ -519,8 +544,5 @@ details.box li{margin-bottom:5px; line-height:1.5;}
   header.app,.side,.toolbar,.legend,.nav-toggle,.mobile-dock{display:none !important;}
   .layout{display:block;}
   .matrix-wrap{max-height:none; overflow:visible;}
-  .tbl-scroll{overflow:visible;}
-  .tbl-scroll > table.tbl{min-width:0;}
-  .scroll-hint{display:none;}
   body{background:#fff;}
 }

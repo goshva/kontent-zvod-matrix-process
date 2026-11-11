@@ -354,7 +354,7 @@
       '<div class="hint">модуль «' + esc(m.title) + '» · статус «' + esc(st.title) + '» · роль «' + esc(role.title) + '»</div>' +
       (cell.isAssumption ? '<div class="card warn tight">В этой ячейке есть <b>допущение</b>: строка кода её не подтверждает. Смотрите вопросы владельцу в опроснике.</div>' : '') +
       (cell.note ? '<div class="quote warn">' + esc(cell.note) + '</div>' : '') +
-      '<table class="tbl"><tbody>' + rightsHtml + '</tbody></table>' +
+      '<table class="tbl"><thead><tr><th>Действие</th><th>Что значит</th><th>Право</th></tr></thead><tbody>' + rightsHtml + '</tbody></table>' +
       '<div class="hint">Значения: разрешено / запрещено / только при ограничении / по подмножеству (только одобренное, только опубликованное, только смена статуса).</div>' +
       '<h4>Ограничения</h4>' + constraintsHtml +
       '<h4>Откуда взято</h4>' + layersHtml +
